@@ -13,37 +13,16 @@ export async function POST(request: NextRequest) {
     const quizCount = Math.min(count || 10, 20);
     const typeLabel = quizType === "spelling" ? "拼写" : quizType === "collocation" ? "搭配" : "词义";
 
-    const systemPrompt = `你是一位专业的英语出题专家。根据给定的单词列表，生成${typeLabel}测试题。
-
-请严格按照以下JSON格式返回，不要添加任何其他文字：
-{
-  "quiz_type": "${quizType || "meaning"}",
-  "questions": [
-    {
-      "id": 1,
-      "word": "测试单词",
-      "type": "meaning/spelling/collocation",
-      "question": "题目描述",
-      "options": {"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"},
-      "correct_answer": "A",
-      "explanation": "答案解析"
-    }
-  ]
-}
-
-要求：
-1. 词义题：给英文单词选中文释义，或给中文释义选英文单词
-2. 拼写题：给中文释义和首字母，补全单词
-3. 搭配题：选出一个与该单词常见的搭配短语
-4. 选项要有迷惑性但不能有歧义
-5. 解析要简明扼要`;
+    const systemPrompt = `英语出题专家。生成${typeLabel}测试题。严格按JSON返回：
+{"quiz_type":"${quizType || "meaning"}","questions":[{"id":1,"word":"单词","type":"${quizType || "meaning"}","question":"题目","options":{"A":"","B":"","C":"","D":""},"correct_answer":"A","explanation":"解析"}]}
+要求：选项有迷惑性，解析简明。`;
 
     const responseContent = await callLLM(
       [
         { role: "system", content: systemPrompt },
         { role: "user", content: `请根据以下单词生成${quizCount}道${typeLabel}测试题：\n${words.join(", ")}` },
       ],
-      { temperature: 0.5 }
+      { temperature: 0.3, maxTokens: 2048 }
     );
 
     let quizResult;

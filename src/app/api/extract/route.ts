@@ -1,52 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { callLLM } from "@/lib/llm";
+import { callLLM, type LLMContentBlock } from "@/lib/llm";
 import { getPool, uuid } from "@/storage/database/mysql-client";
 
 export async function POST(request: NextRequest) {
   try {
-    const { content, sourceType, title } = await request.json();
+    const { content, imageData, imageMimeType, sourceType, title } = await request.json();
 
-    if (!content || typeof content !== "string") {
-      return NextResponse.json({ error: "请提供有效的文本内容" }, { status: 400 });
+    if (!content && !imageData) {
+      return NextResponse.json({ error: "请提供文本内容或图片" }, { status: 400 });
     }
 
-    const systemPrompt = `你是一位专业的英语学习分析专家。你的任务是：
-1. 从给定的英语文本中提取出可能的练习题（阅读理解题、词汇题、语法题）
-2. 提取文本中的重点词汇
-3. 对每个重点词汇提供详细信息
+    const systemPrompt = `英语学习分析专家。从文本或图片中提取练习题和重点词汇。严格按JSON返回：
+{"questions":[{"question_text":"题目","options":{"A":"","B":"","C":"","D":""},"correct_answer":"A","explanation":"解析","question_type":"reading/vocabulary/grammar"}],"key_vocabulary":[{"word":"单词","phonetic":"音标","part_of_speech":"词性","meaning":"中文释义","example_sentence":"例句","example_translation":"翻译","common_phrases":[{"phrase":"搭配","meaning":"释义"}],"word_forms":{"past":"过去式","past_participle":"过去分词","gerund":"现在分词"}}],"summary":"概要"}`;
 
-请严格按照以下JSON格式返回，不要添加任何其他文字：
-{
-  "questions": [
-    {
-      "question_text": "题目内容",
-      "options": {"A": "选项A", "B": "选项B", "C": "选项C", "D": "选项D"},
-      "correct_answer": "A",
-      "explanation": "答案解析",
-      "question_type": "reading/vocabulary/grammar"
+    // Build user message - support text, image, or both
+    let userContent: string | LLMContentBlock[];
+
+    if (imageData) {
+      // Image mode: send image as base64 to LLM
+      const mediaType = (imageMimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+      const blocks: LLMContentBlock[] = [
+        {
+          type: 'image' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: mediaType,
+            data: imageData,
+          },
+        },
+        {
+          type: 'text' as const,
+          text: content
+            ? `请识别图片中的英文文本并分析。补充上下文：${content}`
+            : '请识别图片中的所有英文文本，提取其中的考试题目和重点词汇，并进行详细分析。',
+        },
+      ];
+      userContent = blocks;
+    } else {
+      userContent = `请分析以下英语文本，提取考题和重点词汇：\n\n${content}`;
     }
-  ],
-  "key_vocabulary": [
-    {
-      "word": "单词",
-      "phonetic": "音标",
-      "part_of_speech": "词性",
-      "meaning": "中文释义",
-      "example_sentence": "例句",
-      "example_translation": "例句翻译",
-      "common_phrases": [{"phrase": "搭配短语", "meaning": "短语释义"}],
-      "word_forms": {"original": "原形", "past": "过去式", "past_participle": "过去分词", "gerund": "现在分词"}
-    }
-  ],
-  "summary": "文本概要翻译"
-}`;
 
     const responseContent = await callLLM(
       [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `请分析以下英语文本，提取考题和重点词汇：\n\n${content}` },
+        { role: "user", content: userContent },
       ],
-      { temperature: 0.3 }
+      { temperature: 0.2, maxTokens: 4096 }
     );
 
     let analysisResult;
@@ -60,10 +59,12 @@ export async function POST(request: NextRequest) {
     // Save to database
     const pool = getPool();
     const materialId = uuid();
+    const materialTitle = title || (imageData ? "图片导入" : "导入学习材料");
+    const materialContent = content || "[图片导入]";
 
     await pool.execute(
       `INSERT INTO study_materials (id, title, content, source_type, analysis) VALUES (?, ?, ?, ?, ?)`,
-      [materialId, title || "导入学习材料", content, sourceType || "text", JSON.stringify(analysisResult)]
+      [materialId, materialTitle, materialContent, sourceType || (imageData ? "image" : "text"), JSON.stringify(analysisResult)]
     );
 
     // Save extracted questions

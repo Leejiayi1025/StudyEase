@@ -20,9 +20,11 @@ function getLLMClient(): Anthropic {
   return client;
 }
 
+export type LLMContentBlock = Anthropic.ContentBlockParam;
+
 export interface LLMMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: string | LLMContentBlock[];
 }
 
 export interface LLMOptions {
@@ -48,7 +50,7 @@ export async function callLLM(
     model,
     max_tokens: maxTokens,
     temperature,
-    system: systemMsg?.content || undefined,
+    system: systemMsg?.content as string || undefined,
     messages: nonSystemMessages.map(m => ({
       role: m.role as 'user' | 'assistant',
       content: m.content,

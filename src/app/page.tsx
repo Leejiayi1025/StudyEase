@@ -365,18 +365,26 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
     if (!file) return;
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData });
-      const uploadData = await uploadRes.json();
-      if (!uploadData.success) throw new Error(uploadData.error);
+      // Convert image to base64 using FileReader (safe for large files)
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          // Remove data:image/xxx;base64, prefix
+          const base64Data = result.split(',')[1];
+          resolve(base64Data);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
 
-      // For image, we use LLM to OCR and analyze
+      // Send image directly to AI for analysis
       const res = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: `[用户上传了图片，URL: ${uploadData.url}]\n请识别图片中的英文文本并分析提取题目和词汇。`,
+          imageData: base64,
+          imageMimeType: file.type || 'image/png',
           sourceType: 'image',
           title: file.name,
         }),
@@ -389,7 +397,7 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
         setResult({ error: data.error });
       }
     } catch {
-      setResult({ error: '上传失败，请重试' });
+      setResult({ error: '图片识别失败，请重试' });
     } finally {
       setLoading(false);
     }
@@ -514,6 +522,25 @@ function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClo
   const [showQuiz, setShowQuiz] = useState(false);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
+  const [fromCache, setFromCache] = useState(false);
+  const [deepAnalyzing, setDeepAnalyzing] = useState(false);
+
+  const fetchAnalysis = useCallback(async (forceAI = false) => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word, forceAI }),
+      });
+      const data = await res.json();
+      if (data.success && data.analysis) {
+        setAnalysis(data.analysis);
+        setFromCache(!!data.fromCache);
+      }
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [word]);
 
   useEffect(() => {
     if (!open || !word) return;
@@ -522,52 +549,9 @@ function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClo
     setShowQuiz(false);
     setSelectedAnswer(null);
     setShowExplanation(false);
-
-    const fetchAnalysis = async () => {
-      setLoading(true);
-      try {
-        // Try local vocab first
-        const vocabRes = await fetch(`/api/vocabulary?search=${encodeURIComponent(word)}&pageSize=1`);
-        const vocabData = await vocabRes.json();
-        if (vocabData.data?.length > 0) {
-          const w = vocabData.data[0];
-          setAnalysis({
-            word: w.word,
-            phonetic: w.phonetic || '',
-            syllables: '',
-            part_of_speech: w.part_of_speech || '',
-            meaning: w.meaning,
-            root_analysis: '',
-            word_forms: w.word_forms || {},
-            grammar_points: [],
-            common_collocations: w.common_phrases || [],
-            synonyms: [],
-            antonyms: [],
-            usage_frequency: '',
-            memory_tip: '',
-            sentence_analysis: w.example_sentence ? {
-              original: w.example_sentence,
-              translation: w.example_translation || '',
-              grammar: '',
-              key_phrases: [],
-            } : null,
-          });
-        }
-        // Always fetch AI analysis for richer data
-        const res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ word }),
-        });
-        const data = await res.json();
-        if (data.success && data.analysis) {
-          setAnalysis(data.analysis);
-        }
-      } catch { /* ignore */ }
-      setLoading(false);
-    };
+    setFromCache(false);
     fetchAnalysis();
-  }, [word, open]);
+  }, [word, open, fetchAnalysis]);
 
   const generateQuiz = async () => {
     setQuizLoading(true);
@@ -705,6 +689,14 @@ function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClo
               <div className="p-3 bg-chart-4/5 border border-chart-4/20 rounded">
                 <p className="text-xs"><span className="font-medium">记忆技巧: </span>{analysis.memory_tip}</p>
               </div>
+            )}
+
+            {/* Deep Analysis Button (when cached) */}
+            {fromCache && !deepAnalyzing && (
+              <Button variant="outline" className="w-full" onClick={() => { setDeepAnalyzing(true); fetchAnalysis(true).then(() => setDeepAnalyzing(false)); }}>
+                <Sparkles className="w-4 h-4 mr-2" />
+                AI 深度分析（获取词根、同义词等）
+              </Button>
             )}
 
             {/* Generate Quiz Button */}
