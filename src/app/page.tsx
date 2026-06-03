@@ -53,6 +53,7 @@ interface VocabWord {
   review_count: number;
   correct_count: number;
   difficulty: string | null;
+  is_favorite?: number;
 }
 
 interface MistakeItem {
@@ -1122,6 +1123,8 @@ type MaterialItem = {
   vocabulary_count: number;
   translation_count: number;
   writing_count: number;
+  is_favorite: number;
+  tags: string | null;
 };
 
 function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => void }) {
@@ -1469,43 +1472,89 @@ function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => voi
     );
   }
 
+  // Delete material
+  const deleteMaterial = async (id: string) => {
+    if (!confirm('确定删除这套题吗？删除后无法恢复。')) return;
+    try {
+      await fetch('/api/materials', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      setMaterials(prev => prev.filter(m => m.id !== id));
+    } catch { /* ignore */ }
+  };
+
+  // Toggle favorite
+  const toggleFavorite = async (id: string, current: number) => {
+    const newVal = current ? 0 : 1;
+    try {
+      await fetch('/api/materials', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, is_favorite: newVal }) });
+      setMaterials(prev => prev.map(m => m.id === id ? { ...m, is_favorite: newVal } : m));
+    } catch { /* ignore */ }
+  };
+
+  const [searchText, setSearchText] = useState('');
+  const [showFavorite, setShowFavorite] = useState(false);
+
+  const filteredMaterials = materials.filter(m => {
+    if (showFavorite && !m.is_favorite) return false;
+    if (searchText && !m.title.toLowerCase().includes(searchText.toLowerCase())) return false;
+    return true;
+  });
+
   // ===== List View (套题列表) =====
   return (
     <div className="p-4 space-y-4">
       <h2 className="text-lg font-bold">题库</h2>
-      <p className="text-xs text-muted-foreground">共 {materials.length} 套题</p>
+
+      {/* Search + Filter */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="搜索题目..." className="pl-9 h-9 text-sm" value={searchText} onChange={e => setSearchText(e.target.value)} />
+        </div>
+        <Button variant={showFavorite ? 'default' : 'outline'} size="sm" onClick={() => setShowFavorite(!showFavorite)} className="h-9 px-3">
+          <Star className={`w-4 h-4 ${showFavorite ? 'fill-current' : ''}`} />
+        </Button>
+      </div>
+
+      <p className="text-xs text-muted-foreground">共 {filteredMaterials.length} 套题</p>
 
       {loading ? (
         <div className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /></div>
-      ) : materials.length === 0 ? (
+      ) : filteredMaterials.length === 0 ? (
         <Card>
           <CardContent className="p-8 text-center text-muted-foreground">
             <BookMarked className="w-10 h-10 mx-auto mb-2 text-muted-foreground/50" />
-            <p className="text-sm">题库为空，请先导入学习材料</p>
-            <p className="text-xs mt-1">支持粘贴文章、上传图片、拍照</p>
+            <p className="text-sm">{searchText || showFavorite ? '没有匹配的题目' : '题库为空，请先导入学习材料'}</p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-3">
-          {materials.map(m => (
-            <Card key={m.id} className="cursor-pointer hover:shadow-md transition-shadow active:scale-[0.99]" onClick={() => openMaterial(m)}>
+          {filteredMaterials.map(m => (
+            <Card key={m.id} className="hover:shadow-md transition-shadow">
               <CardContent className="p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
+                <div className="flex items-start gap-3">
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => openMaterial(m)}>
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="text-base">{m.source_type === 'image' ? '📷' : '📄'}</span>
                       <h3 className="font-medium text-sm truncate">{m.title}</h3>
+                      {m.is_favorite ? <Star className="w-3.5 h-3.5 text-chart-4 fill-chart-4 shrink-0" /> : null}
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       <Badge variant="secondary" className="text-xs">共 {m.question_count} 题</Badge>
-                      {m.reading_count > 0 && <Badge className="text-[10px] bg-chart-1/10 text-chart-1">📖阅读 {m.reading_count}</Badge>}
-                      {m.cloze_count > 0 && <Badge className="text-[10px] bg-chart-2/10 text-chart-2">📝完型 {m.cloze_count}</Badge>}
-                      {m.vocabulary_count > 0 && <Badge className="text-[10px] bg-chart-4/10 text-chart-4">📚词汇 {m.vocabulary_count}</Badge>}
-                      {m.translation_count > 0 && <Badge className="text-[10px] bg-chart-3/10 text-chart-3">🌐翻译 {m.translation_count}</Badge>}
-                      {m.writing_count > 0 && <Badge className="text-[10px] bg-primary/10 text-primary">✍️作文 {m.writing_count}</Badge>}
+                      {m.reading_count > 0 && <Badge className="text-[10px] bg-chart-1/10 text-chart-1">📖{m.reading_count}</Badge>}
+                      {m.cloze_count > 0 && <Badge className="text-[10px] bg-chart-2/10 text-chart-2">📝{m.cloze_count}</Badge>}
+                      {m.vocabulary_count > 0 && <Badge className="text-[10px] bg-chart-4/10 text-chart-4">📚{m.vocabulary_count}</Badge>}
+                      {m.translation_count > 0 && <Badge className="text-[10px] bg-chart-3/10 text-chart-3">🌐{m.translation_count}</Badge>}
+                      {m.writing_count > 0 && <Badge className="text-[10px] bg-primary/10 text-primary">✍️{m.writing_count}</Badge>}
                     </div>
                   </div>
-                  <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" />
+                  <div className="flex flex-col gap-1">
+                    <button onClick={(e) => { e.stopPropagation(); toggleFavorite(m.id, m.is_favorite); }} className="p-1.5 rounded hover:bg-muted transition-colors">
+                      <Star className={`w-4 h-4 ${m.is_favorite ? 'text-chart-4 fill-chart-4' : 'text-muted-foreground'}`} />
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteMaterial(m.id); }} className="p-1.5 rounded hover:bg-destructive/10 transition-colors">
+                      <XCircle className="w-4 h-4 text-muted-foreground hover:text-destructive" />
+                    </button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1531,7 +1580,8 @@ function VocabularyPage({ onWordClick }: { onWordClick: (word: string) => void }
   const fetchWords = useCallback(async () => {
     try {
       const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-      if (filter !== 'all') params.set('mastery', filter);
+      if (filter === 'fav') params.set('favorite', 'true');
+      else if (filter !== 'all') params.set('mastery', filter);
       if (search) params.set('search', search);
       const res = await fetch(`/api/vocabulary?${params}`);
       const data = await res.json();
@@ -1762,6 +1812,7 @@ function VocabularyPage({ onWordClick }: { onWordClick: (word: string) => void }
           <TabsTrigger value="1" className="flex-1 text-xs">认识</TabsTrigger>
           <TabsTrigger value="2" className="flex-1 text-xs">学习中</TabsTrigger>
           <TabsTrigger value="3" className="flex-1 text-xs">已掌握</TabsTrigger>
+          <TabsTrigger value="fav" className="flex-1 text-xs">⭐收藏</TabsTrigger>
         </TabsList>
       </Tabs>
 
@@ -1770,20 +1821,35 @@ function VocabularyPage({ onWordClick }: { onWordClick: (word: string) => void }
       {/* Word List */}
       <div className="space-y-1">
         {words.map((w) => (
-          <Card key={w.id} className="cursor-pointer hover:shadow-sm transition-shadow active:scale-[0.99]"
-            onClick={() => onWordClick(w.word)}>
-            <CardContent className="p-3 flex items-center justify-between">
-              <div className="flex-1 min-w-0">
+          <Card key={w.id} className="hover:shadow-sm transition-shadow">
+            <CardContent className="p-3 flex items-center gap-2">
+              <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onWordClick(w.word)}>
                 <div className="flex items-center gap-2">
                   <span className="font-mono font-medium">{w.word}</span>
+                  {w.part_of_speech && <span className="text-[10px] text-muted-foreground">{w.part_of_speech}</span>}
+                  {w.is_favorite ? <Star className="w-3 h-3 text-chart-4 fill-chart-4" /> : null}
                 </div>
                 <p className="text-xs text-muted-foreground truncate">{w.meaning}</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1">
                 <Badge className={getMasteryColor(w.mastery_level)} variant="secondary">
                   {getMasteryLabel(w.mastery_level)}
                 </Badge>
-                <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                <button onClick={async () => {
+                  const newVal = w.is_favorite ? 0 : 1;
+                  await fetch('/api/vocabulary', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: w.id, is_favorite: newVal }) });
+                  setWords(prev => prev.map(v => v.id === w.id ? { ...v, is_favorite: newVal } : v));
+                }} className="p-1 rounded hover:bg-muted">
+                  <Star className={`w-3.5 h-3.5 ${w.is_favorite ? 'text-chart-4 fill-chart-4' : 'text-muted-foreground'}`} />
+                </button>
+                <button onClick={async () => {
+                  if (!confirm(`确定删除 "${w.word}" 吗？`)) return;
+                  await fetch('/api/vocabulary', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: w.id }) });
+                  setWords(prev => prev.filter(v => v.id !== w.id));
+                  setTotal(prev => prev - 1);
+                }} className="p-1 rounded hover:bg-destructive/10">
+                  <XCircle className="w-3.5 h-3.5 text-muted-foreground hover:text-destructive" />
+                </button>
               </div>
             </CardContent>
           </Card>
