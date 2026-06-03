@@ -335,7 +335,9 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
   const [textContent, setTextContent] = useState('');
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [saved, setSaved] = useState(false);
   const [selectedImages, setSelectedImages] = useState<Array<{ file: File; preview: string; base64: string }>>([]);
 
   const fileToBase64 = (file: File): Promise<string> =>
@@ -367,61 +369,77 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
     });
   };
 
-  const handleImport = async () => {
-    if (!textContent.trim()) return;
+  // Step 1: Analyze only (don't save)
+  const handleAnalyze = async () => {
+    const isText = importType === 'text';
+    if (isText && !textContent.trim()) return;
+    if (!isText && selectedImages.length === 0) return;
+
     setLoading(true);
     setResult(null);
+    setSaved(false);
     try {
+      const body: Record<string, unknown> = isText
+        ? { content: textContent, sourceType: 'text', title: title || undefined }
+        : {
+            images: selectedImages.map(img => ({ data: img.base64, mimeType: img.file.type || 'image/png' })),
+            sourceType: 'image',
+            title: title || `图片导入 (${selectedImages.length}张)`,
+          };
+
       const res = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: textContent, sourceType: 'text', title: title || undefined }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success) {
         setResult(data.analysis as Record<string, unknown>);
-        onDone();
       } else {
         setResult({ error: data.error });
       }
     } catch {
-      setResult({ error: '网络错误，请重试' });
+      setResult({ error: '识别失败，请重试' });
     } finally {
       setLoading(false);
     }
   };
 
-  const handleImageImport = async () => {
-    if (selectedImages.length === 0) return;
-    setLoading(true);
-    setResult(null);
+  // Step 2: Save to question bank
+  const handleSave = async () => {
+    if (!result || saved) return;
+    setSaving(true);
     try {
-      // Send all images together
-      const imagesData = selectedImages.map(img => ({
-        data: img.base64,
-        mimeType: img.file.type || 'image/png',
-      }));
+      const isText = importType === 'text';
+      const body: Record<string, unknown> = isText
+        ? { content: textContent, sourceType: 'text', title: title || undefined, save: { analysis: result } }
+        : {
+            images: selectedImages.map(img => ({ data: img.base64, mimeType: img.file.type || 'image/png' })),
+            sourceType: 'image',
+            title: title || `图片导入 (${selectedImages.length}张)`,
+            save: { analysis: result },
+          };
+
       const res = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          images: imagesData,
-          sourceType: 'image',
-          title: title || `图片导入 (${selectedImages.length}张)`,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success) {
-        setResult(data.analysis as Record<string, unknown>);
+        setSaved(true);
         onDone();
-      } else {
-        setResult({ error: data.error });
       }
-    } catch {
-      setResult({ error: '图片识别失败，请重试' });
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* ignore */ }
+    setSaving(false);
+  };
+
+  // Discard and reset
+  const handleDiscard = () => {
+    setResult(null);
+    setSaved(false);
+    setSelectedImages([]);
+    setTextContent('');
   };
 
   const hasResult = result !== null;
@@ -453,9 +471,9 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
         <div className="space-y-3">
           <Input placeholder="标题（可选）" value={title} onChange={(e) => setTitle(e.target.value)} />
           <Textarea placeholder="粘贴英语文章、阅读理解、完形填空等内容..." className="min-h-[200px] text-sm" value={textContent} onChange={(e) => setTextContent(e.target.value)} />
-          <Button onClick={handleImport} disabled={loading || !textContent.trim()} className="w-full">
+          <Button onClick={handleAnalyze} disabled={loading || !textContent.trim()} className="w-full">
             {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
-            {loading ? 'AI分析中...' : '智能提取分析'}
+            {loading ? 'AI识别中...' : '智能识别分析'}
           </Button>
         </div>
       ) : (
@@ -497,7 +515,7 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
                 ))}
               </div>
               <Input placeholder="标题（可选）" value={title} onChange={(e) => setTitle(e.target.value)} />
-              <Button onClick={handleImageImport} disabled={loading} className="w-full">
+              <Button onClick={handleAnalyze} disabled={loading} className="w-full">
                 {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
                 {loading ? 'AI识别中...' : `识别 ${selectedImages.length} 张图片`}
               </Button>
@@ -516,10 +534,25 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
       {/* Results */}
       {hasResult && !hasError && hasQuestions && (
         <div className="space-y-3">
-          {/* Stats */}
-          <div className="flex gap-3 text-xs">
-            <Badge variant="secondary"><FileText className="w-3 h-3 mr-1" />{questions.length} 道题</Badge>
-            <Badge variant="secondary"><BookMarked className="w-3 h-3 mr-1" />{vocab.length} 个生词</Badge>
+          {/* Stats + Save/Discard */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-2 text-xs">
+              <Badge variant="secondary"><FileText className="w-3 h-3 mr-1" />{questions.length} 道题</Badge>
+              <Badge variant="secondary"><BookMarked className="w-3 h-3 mr-1" />{vocab.length} 个生词</Badge>
+            </div>
+            {!saved ? (
+              <div className="flex gap-1.5">
+                <Button variant="ghost" size="sm" onClick={handleDiscard} className="h-7 text-xs text-muted-foreground">
+                  <XCircle className="w-3 h-3 mr-1" />丢弃
+                </Button>
+                <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
+                  {saving ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <CheckCircle2 className="w-3 h-3 mr-1" />}
+                  {saving ? '保存中...' : '保存到题库'}
+                </Button>
+              </div>
+            ) : (
+              <Badge className="bg-primary/10 text-primary"><CheckCircle2 className="w-3 h-3 mr-1" />已保存</Badge>
+            )}
           </div>
 
           {/* View Tabs */}
