@@ -145,9 +145,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Save vocabulary (upsert)
+    // Save AI-extracted vocabulary (upsert)
+    const savedWords = new Set<string>();
     if (analysisResult.vocabulary?.length > 0) {
       for (const vocab of analysisResult.vocabulary) {
+        savedWords.add(vocab.word.toLowerCase());
         const [existing] = await pool.execute(`SELECT id FROM vocabulary WHERE word = ? LIMIT 1`, [vocab.word]);
         const existingRow = (existing as Record<string, unknown>[])[0];
         const vocabData = [
@@ -160,6 +162,51 @@ export async function POST(request: NextRequest) {
           await pool.execute(`UPDATE vocabulary SET phonetic=?, part_of_speech=?, meaning=?, example_sentence=?, example_translation=?, common_phrases=?, word_forms=? WHERE id=?`, [...vocabData, existingRow.id]);
         } else {
           await pool.execute(`INSERT INTO vocabulary (id, word, phonetic, part_of_speech, meaning, example_sentence, example_translation, common_phrases, word_forms) VALUES (?,?,?,?,?,?,?,?,?)`, [uuid(), vocab.word, ...vocabData]);
+        }
+      }
+    }
+
+    // ===== Pre-cache ALL words from the article =====
+    // Extract all English words from the text
+    const fullText = analysisResult.article?.original || content || '';
+    const allWordsInText: string[] = (fullText.match(/[a-zA-Z]{3,}/g) || []).map((w: string) => w.toLowerCase());
+    const uniqueWords: string[] = [...new Set(allWordsInText)].filter(w => w.length >= 3 && !savedWords.has(w));
+
+    if (uniqueWords.length > 0) {
+      // Check which words already exist in DB
+      const [existingWords] = await pool.execute(
+        `SELECT word FROM vocabulary WHERE word IN (${uniqueWords.map(() => '?').join(',')})`,
+        uniqueWords as (string | number | null)[]
+      );
+      const existingSet = new Set((existingWords as Record<string, unknown>[]).map(r => String(r.word).toLowerCase()));
+      const newWords = uniqueWords.filter((w: string) => !existingSet.has(w));
+
+      // Batch translate new words with AI (chunks of 60)
+      if (newWords.length > 0) {
+        const CHUNK_SIZE = 60;
+        for (let i = 0; i < newWords.length; i += CHUNK_SIZE) {
+          const chunk = newWords.slice(i, i + CHUNK_SIZE);
+          try {
+            const batchResponse = await callLLM([
+              { role: 'system', content: '你是英语词典。对每个单词返回JSON数组，格式：[{"word":"单词","phonetic":"音标","pos":"词性","meaning":"中文释义"}]。只返回JSON，不要其他文字。' },
+              { role: 'user', content: chunk.join(', ') },
+            ], { temperature: 0.1, maxTokens: 4096 });
+
+            const jsonMatch = batchResponse.match(/\[[\s\S]*\]/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              for (const item of parsed) {
+                if (item.word && item.meaning) {
+                  await pool.execute(
+                    `INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning) VALUES (?, ?, ?, ?, ?)`,
+                    [uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning]
+                  );
+                }
+              }
+            }
+          } catch {
+            // Batch failed, skip - words will be translated on click
+          }
         }
       }
     }
