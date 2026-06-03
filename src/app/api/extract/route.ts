@@ -41,6 +41,7 @@ export async function POST(request: NextRequest) {
 
       // Save vocabulary
       const savedWords = new Set<string>();
+      console.log('[save] vocabulary to save:', analysisResult.vocabulary?.length || 0);
       if (analysisResult.vocabulary?.length > 0) {
         for (const vocab of analysisResult.vocabulary) {
           savedWords.add(vocab.word.toLowerCase());
@@ -101,6 +102,7 @@ export async function POST(request: NextRequest) {
 3. 提取完整的题目（包括所有选项），不能只提取部分
 4. 如果一道题跨越多张图片，必须合并成完整的一道题
 5. 文章必须完整保留原文
+6. **vocabulary 必须提取所有值得学习的单词**，包括：文章中的生词、题目中的关键词、选项中的词汇。不要遗漏！
 
 严格按以下JSON格式返回：
 {
@@ -134,6 +136,14 @@ export async function POST(request: NextRequest) {
     }
   ]
 }
+
+vocabulary 提取要求：
+- 文章中的重点词汇和生词
+- 题目中的关键词
+- 每个选项中的重要词汇
+- 每个词都要提供：音标、词性（标准缩写）、中文释义、例句、同义词、反义词
+- source 字段标注来源：article=文章、question=题目、option=选项
+- 尽量多提取，不要遗漏
 
 题型：reading=阅读理解 cloze=完型填空 vocabulary=词汇选择 translation=翻译题 writing=作文题
 词性缩写：n. v. adj. adv. prep. conj. pron. det. int.`;
