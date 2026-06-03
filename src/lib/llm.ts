@@ -87,17 +87,28 @@ async function callDashScope(messages: LLMMessage[], options: LLMOptions): Promi
   const temperature = options.temperature ?? 0.3;
   const maxTokens = options.maxTokens ?? 4096;
 
-  // Convert to OpenAI message format
+  // Convert to OpenAI message format, preserving image content
   const openaiMessages = messages.map(m => {
     if (m.role === 'system') {
       return { role: 'system' as const, content: m.content as string };
     }
-    // Handle image content blocks - convert to text for text-only models
+    // Handle image content blocks - convert to OpenAI vision format
     if (Array.isArray(m.content)) {
-      const textParts = m.content
-        .filter((b) => 'text' in b && b.type === 'text')
-        .map((b) => (b as { type: string; text: string }).text);
-      return { role: m.role as 'user' | 'assistant', content: textParts.join('\n') };
+      const parts: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
+      for (const block of m.content) {
+        if ('text' in block && block.type === 'text') {
+          parts.push({ type: 'text', text: (block as { type: string; text: string }).text });
+        } else if (block.type === 'image' && 'source' in block) {
+          const src = (block as { type: string; source: { type: string; media_type: string; data: string } }).source;
+          if (src.type === 'base64') {
+            parts.push({
+              type: 'image_url',
+              image_url: { url: `data:${src.media_type};base64,${src.data}` },
+            });
+          }
+        }
+      }
+      return { role: m.role as 'user' | 'assistant', content: parts };
     }
     return { role: m.role as 'user' | 'assistant', content: m.content as string };
   });
@@ -106,7 +117,7 @@ async function callDashScope(messages: LLMMessage[], options: LLMOptions): Promi
     model,
     temperature,
     max_tokens: maxTokens,
-    messages: openaiMessages,
+    messages: openaiMessages as OpenAI.ChatCompletionMessageParam[],
   });
 
   return response.choices[0]?.message?.content || '';

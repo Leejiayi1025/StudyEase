@@ -71,26 +71,15 @@ export async function POST(request: NextRequest) {
       userContent = `分析以下英语文本：\n\n${content}`;
     }
 
-    // 图片识别用 Anthropic (mimo)，文本用 DashScope (DeepSeek V3)
+    // 文本用 DeepSeek V3，图片用 Qwen2.5-VL
     const llmOptions = imageData
-      ? { temperature: 0.2, maxTokens: 6144, model: process.env.ANTHROPIC_MODEL || 'mimo-v2.5-pro' }
+      ? { temperature: 0.2, maxTokens: 6144, model: process.env.DASHSCOPE_VL_MODEL || 'qwen-vl-max' }
       : { temperature: 0.2, maxTokens: 6144 };
-
-    // 图片需要切换到 Anthropic provider
-    const originalProvider = process.env.LLM_PROVIDER;
-    if (imageData) {
-      process.env.LLM_PROVIDER = 'anthropic';
-    }
 
     const responseContent = await callLLM(
       [{ role: "system", content: systemPrompt }, { role: "user", content: userContent }],
       llmOptions
     );
-
-    // 恢复 provider
-    if (imageData) {
-      process.env.LLM_PROVIDER = originalProvider || 'dashscope';
-    }
 
     let analysisResult;
     try {
