@@ -18,46 +18,47 @@ export async function POST(request: NextRequest) {
 严格按以下JSON格式返回，不要添加其他文字：
 {
   "article": {
-    "original": "完整英文原文",
-    "translation": "完整中文翻译",
+    "original": "完整英文原文（一字不漏，保留所有内容）",
+    "translation": "完整中文翻译（逐句对应）",
     "sentences": [{"english":"英文句子","chinese":"中文翻译"}]
   },
   "questions": [
     {
-      "question_text": "题目英文",
+      "question_text": "题目英文原文（完整保留）",
       "question_translation": "题目中文翻译",
       "question_type": "reading/cloze/vocabulary/translation/writing",
       "question_type_cn": "阅读理解/完型填空/词汇选择/翻译题/作文",
-      "options": {"A":"","B":"","C":"","D":""},
-      "options_translation": {"A":"","B":"","C":"","D":""},
+      "options": {"A":"英文选项完整原文","B":"","C":"","D":""},
+      "options_translation": {"A":"选项A中文翻译","B":"","C":"","D":""},
       "correct_answer": "A",
-      "explanation": "解析（英文+中文）",
-      "socratic_hints": ["引导问题1 (中文翻译)", "引导问题2 (中文翻译)"]
+      "explanation": "英文解析",
+      "explanation_cn": "中文解析翻译",
+      "socratic_hints": ["English hint 1 (中文翻译)", "English hint 2 (中文翻译)"]
     }
   ],
   "vocabulary": [
     {
-      "word":"单词","phonetic":"音标","part_of_speech":"词性","meaning":"中文释义",
-      "example_sentence":"原文例句","example_translation":"翻译",
+      "word":"单词","phonetic":"音标","part_of_speech":"n./v./adj./adv.等标准缩写",
+      "meaning":"中文释义",
+      "example_sentence":"原文例句","example_translation":"例句翻译",
       "source":"article/question/option",
+      "synonyms":["同义词1","同义词2"],
+      "antonyms":["反义词1"],
       "common_phrases":[{"phrase":"搭配","meaning":"释义"}],
-      "word_forms":{"past":"过去式","past_participle":"过去分词"}
+      "word_forms":{"past":"过去式","past_participle":"过去分词","gerund":"现在分词"}
     }
   ]
 }
 
-题型分类规则：
-- reading: 阅读理解（根据文章回答问题）
-- cloze: 完型填空（文章中有空格需要选词填入）
-- vocabulary: 词汇选择（词义辨析、选词填空）
-- translation: 翻译题（中译英或英译中）
-- writing: 作文题（给出写作任务）
-
-重要：
-1. 选项必须翻译成中文
-2. 每道题给出2-3条苏格拉底式引导问题（英文+中文翻译）
-3. 提取文章/题目/选项中所有值得学习的单词
-4. 如果是图片，先OCR识别所有文字再分析`;
+规则：
+1. article.original 必须是完整原文，不能省略任何内容
+2. article.sentences 逐句翻译，每句都要
+3. 选项必须翻译成中文
+4. explanation 必须有英文+中文（explanation_cn）
+5. 每道题给出2-3条苏格拉底式引导（英文+中文翻译）
+6. 词性必须用标准缩写：n. v. adj. adv. prep. conj. pron. det. int.
+7. 同义词反义词尽量提供
+8. 如果是图片，先OCR识别所有文字再分析`;
 
     // Build user content
     let userContent: string | LLMContentBlock[];
@@ -126,6 +127,9 @@ export async function POST(request: NextRequest) {
     // Save questions with type classification
     if (analysisResult.questions?.length > 0) {
       for (const q of analysisResult.questions) {
+        const explanationFull = q.explanation_cn
+          ? `${q.explanation}\n\n${q.explanation_cn}`
+          : q.explanation;
         await pool.execute(
           `INSERT INTO questions (id, material_id, question_text, options, correct_answer, explanation, question_type, analysis)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -137,8 +141,9 @@ export async function POST(request: NextRequest) {
               question_translation: q.question_translation,
               socratic_hints: q.socratic_hints,
               question_type_cn: q.question_type_cn,
+              explanation_cn: q.explanation_cn,
             }),
-            q.correct_answer, q.explanation, q.question_type || 'reading',
+            q.correct_answer, explanationFull, q.question_type || 'reading',
             JSON.stringify({ socratic_hints: q.socratic_hints }),
           ]
         );
@@ -157,11 +162,13 @@ export async function POST(request: NextRequest) {
           vocab.example_sentence || null, vocab.example_translation || null,
           vocab.common_phrases ? JSON.stringify(vocab.common_phrases) : null,
           vocab.word_forms ? JSON.stringify(vocab.word_forms) : null,
+          vocab.synonyms ? JSON.stringify(vocab.synonyms) : null,
+          vocab.antonyms ? JSON.stringify(vocab.antonyms) : null,
         ];
         if (existingRow) {
-          await pool.execute(`UPDATE vocabulary SET phonetic=?, part_of_speech=?, meaning=?, example_sentence=?, example_translation=?, common_phrases=?, word_forms=? WHERE id=?`, [...vocabData, existingRow.id]);
+          await pool.execute(`UPDATE vocabulary SET phonetic=?, part_of_speech=?, meaning=?, example_sentence=?, example_translation=?, common_phrases=?, word_forms=?, synonyms=?, antonyms=? WHERE id=?`, [...vocabData, existingRow.id]);
         } else {
-          await pool.execute(`INSERT INTO vocabulary (id, word, phonetic, part_of_speech, meaning, example_sentence, example_translation, common_phrases, word_forms) VALUES (?,?,?,?,?,?,?,?,?)`, [uuid(), vocab.word, ...vocabData]);
+          await pool.execute(`INSERT INTO vocabulary (id, word, phonetic, part_of_speech, meaning, example_sentence, example_translation, common_phrases, word_forms, synonyms, antonyms) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [uuid(), vocab.word, ...vocabData]);
         }
       }
     }
@@ -188,7 +195,7 @@ export async function POST(request: NextRequest) {
           const chunk = newWords.slice(i, i + CHUNK_SIZE);
           try {
             const batchResponse = await callLLM([
-              { role: 'system', content: '你是英语词典。对每个单词返回JSON数组，格式：[{"word":"单词","phonetic":"音标","pos":"词性","meaning":"中文释义"}]。只返回JSON，不要其他文字。' },
+              { role: 'system', content: '你是英语词典。对每个单词返回JSON数组。词性用标准缩写：n.名词 v.动词 adj.形容词 adv.副词 prep.介词 conj.连词 pron.代词 det.冠词 int.感叹词。格式：[{"word":"单词","phonetic":"音标","pos":"n./v./adj.等","meaning":"中文释义","synonyms":["同义词1","同义词2"],"antonyms":["反义词1"]}]。只返回JSON。' },
               { role: 'user', content: chunk.join(', ') },
             ], { temperature: 0.1, maxTokens: 4096 });
 
@@ -198,8 +205,12 @@ export async function POST(request: NextRequest) {
               for (const item of parsed) {
                 if (item.word && item.meaning) {
                   await pool.execute(
-                    `INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning) VALUES (?, ?, ?, ?, ?)`,
-                    [uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning]
+                    `INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning, synonyms, antonyms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                      uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning,
+                      item.synonyms ? JSON.stringify(item.synonyms) : null,
+                      item.antonyms ? JSON.stringify(item.antonyms) : null,
+                    ]
                   );
                 }
               }

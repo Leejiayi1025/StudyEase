@@ -22,7 +22,11 @@ export async function POST(request: NextRequest) {
     }
 
     if (cached && cached.meaning) {
-      // 本地有数据，组装成分析结果返回（秒回）
+      const parseJSON = (val: unknown) => {
+        if (!val) return [];
+        if (typeof val === 'string') { try { return JSON.parse(val); } catch { return []; } }
+        return val;
+      };
       const analysis = {
         word: cached.word,
         phonetic: cached.phonetic || '',
@@ -30,11 +34,11 @@ export async function POST(request: NextRequest) {
         part_of_speech: cached.part_of_speech || '',
         meaning: cached.meaning,
         root_analysis: '',
-        word_forms: typeof cached.word_forms === 'string' ? JSON.parse(cached.word_forms as string) : (cached.word_forms || {}),
+        word_forms: parseJSON(cached.word_forms),
         grammar_points: [],
-        common_collocations: typeof cached.common_phrases === 'string' ? JSON.parse(cached.common_phrases as string) : (cached.common_phrases || []),
-        synonyms: [],
-        antonyms: '',
+        common_collocations: parseJSON(cached.common_phrases),
+        synonyms: parseJSON(cached.synonyms),
+        antonyms: parseJSON(cached.antonyms),
         usage_frequency: '',
         memory_tip: '',
         sentence_analysis: cached.example_sentence ? {

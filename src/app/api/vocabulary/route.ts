@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     // Data query
     const offset = (page - 1) * pageSize;
     const [rows] = await pool.execute(
-      `SELECT id, word, phonetic, part_of_speech, meaning, mastery_level, is_cet4_core, review_count, correct_count, difficulty FROM vocabulary ${whereClause} ORDER BY word ASC LIMIT ? OFFSET ?`,
+      `SELECT id, word, phonetic, part_of_speech, meaning, mastery_level, is_cet4_core, review_count, correct_count, difficulty, synonyms, antonyms FROM vocabulary ${whereClause} ORDER BY word ASC LIMIT ? OFFSET ?`,
       [...params, pageSize, offset] as (string | number | null)[]
     );
 

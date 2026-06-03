@@ -163,7 +163,7 @@ export default function StudyApp() {
 
       {/* Word Popup */}
       {popupWord && (
-        <WordPopup word={popupWord} open={!!popupWord} onClose={() => setPopupWord(null)} />
+        <WordPopup word={popupWord} open={!!popupWord} onClose={() => setPopupWord(null)} onWordClick={(w) => setPopupWord(w)} />
       )}
 
       {/* Main Content */}
@@ -711,7 +711,7 @@ function ImportQuestionCard({ question, index, onWordClick }: { question: Record
 }
 
 // ===== WORD POPUP =====
-function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClose: () => void }) {
+function WordPopup({ word, open, onClose, onWordClick }: { word: string; open: boolean; onClose: () => void; onWordClick?: (word: string) => void }) {
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
   const [loading, setLoading] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
@@ -861,21 +861,25 @@ function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClo
 
             {/* Synonyms & Antonyms */}
             {(analysis.synonyms?.length > 0 || analysis.antonyms?.length > 0) && (
-              <div className="flex flex-wrap gap-3">
+              <div className="space-y-2">
                 {analysis.synonyms?.length > 0 && (
                   <div className="text-xs">
                     <span className="text-muted-foreground mr-1.5">同义:</span>
-                    {analysis.synonyms.map((s, i) => (
-                      <Badge key={i} variant="secondary" className="mr-1 mb-1 text-xs">{s}</Badge>
-                    ))}
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {analysis.synonyms.map((s, i) => (
+                        <span key={i} className="cursor-pointer text-primary underline decoration-dotted underline-offset-2 hover:decoration-solid bg-primary/5 px-1.5 py-0.5 rounded text-xs" onClick={() => onWordClick?.(s)}>{s}</span>
+                      ))}
+                    </div>
                   </div>
                 )}
                 {analysis.antonyms?.length > 0 && (
                   <div className="text-xs">
                     <span className="text-muted-foreground mr-1.5">反义:</span>
-                    {analysis.antonyms.map((a, i) => (
-                      <Badge key={i} variant="outline" className="mr-1 mb-1 text-xs">{a}</Badge>
-                    ))}
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {analysis.antonyms.map((a, i) => (
+                        <span key={i} className="cursor-pointer text-destructive underline decoration-dotted underline-offset-2 hover:decoration-solid bg-destructive/5 px-1.5 py-0.5 rounded text-xs" onClick={() => onWordClick?.(a)}>{a}</span>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

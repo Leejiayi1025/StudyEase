@@ -57,6 +57,8 @@ export const vocabulary = pgTable(
 		example_translation: text("example_translation"),
 		common_phrases: jsonb("common_phrases"), // [{ phrase: "...", meaning: "..." }]
 		word_forms: jsonb("word_forms"), // { original: "...", past: "...", past_participle: "...", etc. }
+		synonyms: jsonb("synonyms"), // ["同义词1", "同义词2"]
+		antonyms: jsonb("antonyms"), // ["反义词1"]
 		difficulty: varchar("difficulty", { length: 20 }).default("medium"), // easy, medium, hard
 		mastery_level: integer("mastery_level").default(0), // 0=unknown, 1=seen, 2=learning, 3=mastered
 		review_count: integer("review_count").default(0),
