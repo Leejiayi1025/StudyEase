@@ -173,62 +173,65 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // ===== Pre-cache ALL words from the article =====
-    // Extract all English words from the text
-    const fullText = analysisResult.article?.original || content || '';
-    const allWordsInText: string[] = (fullText.match(/[a-zA-Z]{3,}/g) || []).map((w: string) => w.toLowerCase());
-    const uniqueWords: string[] = [...new Set(allWordsInText)].filter(w => w.length >= 3 && !savedWords.has(w));
-
-    if (uniqueWords.length > 0) {
-      // Check which words already exist in DB
-      const [existingWords] = await pool.execute(
-        `SELECT word FROM vocabulary WHERE word IN (${uniqueWords.map(() => '?').join(',')})`,
-        uniqueWords as (string | number | null)[]
-      );
-      const existingSet = new Set((existingWords as Record<string, unknown>[]).map(r => String(r.word).toLowerCase()));
-      const newWords = uniqueWords.filter((w: string) => !existingSet.has(w));
-
-      // Batch translate new words with AI (chunks of 60)
-      if (newWords.length > 0) {
-        const CHUNK_SIZE = 60;
-        for (let i = 0; i < newWords.length; i += CHUNK_SIZE) {
-          const chunk = newWords.slice(i, i + CHUNK_SIZE);
-          try {
-            const batchResponse = await callLLM([
-              { role: 'system', content: '你是英语词典。对每个单词返回JSON数组。词性用标准缩写：n.名词 v.动词 adj.形容词 adv.副词 prep.介词 conj.连词 pron.代词 det.冠词 int.感叹词。格式：[{"word":"单词","phonetic":"音标","pos":"n./v./adj.等","meaning":"中文释义","synonyms":["同义词1","同义词2"],"antonyms":["反义词1"]}]。只返回JSON。' },
-              { role: 'user', content: chunk.join(', ') },
-            ], { temperature: 0.1, maxTokens: 4096 });
-
-            const jsonMatch = batchResponse.match(/\[[\s\S]*\]/);
-            if (jsonMatch) {
-              const parsed = JSON.parse(jsonMatch[0]);
-              for (const item of parsed) {
-                if (item.word && item.meaning) {
-                  await pool.execute(
-                    `INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning, synonyms, antonyms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [
-                      uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning,
-                      item.synonyms ? JSON.stringify(item.synonyms) : null,
-                      item.antonyms ? JSON.stringify(item.antonyms) : null,
-                    ]
-                  );
-                }
-              }
-            }
-          } catch {
-            // Batch failed, skip - words will be translated on click
-          }
-        }
-      }
-    }
-
-    return NextResponse.json({
+    // Return result immediately
+    const result = NextResponse.json({
       success: true,
       material_id: materialId,
       questions_count: analysisResult.questions?.length || 0,
       vocabulary_count: analysisResult.vocabulary?.length || 0,
       analysis: analysisResult,
     });
+
+    // ===== Background: Pre-cache ALL words from the article =====
+    // Fire and forget - doesn't block the response
+    const fullText = analysisResult.article?.original || content || '';
+    const allWordsInText: string[] = (fullText.match(/[a-zA-Z]{3,}/g) || []).map((w: string) => w.toLowerCase());
+    const uniqueWords: string[] = [...new Set(allWordsInText)].filter(w => w.length >= 3 && !savedWords.has(w));
+
+    if (uniqueWords.length > 0) {
+      // Run in background (don't await)
+      (async () => {
+        try {
+          const [existingWords] = await pool.execute(
+            `SELECT word FROM vocabulary WHERE word IN (${uniqueWords.map(() => '?').join(',')})`,
+            uniqueWords as (string | number | null)[]
+          );
+          const existingSet = new Set((existingWords as Record<string, unknown>[]).map(r => String(r.word).toLowerCase()));
+          const newWords = uniqueWords.filter((w: string) => !existingSet.has(w));
+
+          if (newWords.length > 0) {
+            const CHUNK_SIZE = 60;
+            for (let i = 0; i < newWords.length; i += CHUNK_SIZE) {
+              const chunk = newWords.slice(i, i + CHUNK_SIZE);
+              try {
+                const batchResponse = await callLLM([
+                  { role: 'system', content: '你是英语词典。对每个单词返回JSON数组。词性用标准缩写：n.名词 v.动词 adj.形容词 adv.副词 prep.介词 conj.连词 pron.代词 det.冠词 int.感叹词。格式：[{"word":"单词","phonetic":"音标","pos":"n./v./adj.等","meaning":"中文释义","synonyms":["同义词1","同义词2"],"antonyms":["反义词1"]}]。只返回JSON。' },
+                  { role: 'user', content: chunk.join(', ') },
+                ], { temperature: 0.1, maxTokens: 4096 });
+
+                const jsonMatch = batchResponse.match(/\[[\s\S]*\]/);
+                if (jsonMatch) {
+                  const parsed = JSON.parse(jsonMatch[0]);
+                  for (const item of parsed) {
+                    if (item.word && item.meaning) {
+                      await pool.execute(
+                        `INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning, synonyms, antonyms) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                        [uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning,
+                          item.synonyms ? JSON.stringify(item.synonyms) : null,
+                          item.antonyms ? JSON.stringify(item.antonyms) : null,
+                        ]
+                      );
+                    }
+                  }
+                }
+              } catch { /* skip */ }
+            }
+          }
+        } catch { /* ignore */ }
+      })();
+    }
+
+    return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "提取分析失败";
     return NextResponse.json({ error: message }, { status: 500 });
