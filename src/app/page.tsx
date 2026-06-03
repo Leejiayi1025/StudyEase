@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import {
   BookOpen,
   Upload,
+  Camera,
   Library,
   Brain,
   AlertTriangle,
@@ -335,6 +336,36 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
   const [title, setTitle] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
+  const [selectedImages, setSelectedImages] = useState<Array<{ file: File; preview: string; base64: string }>>([]);
+
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+    const newImages = await Promise.all(
+      files.map(async (file) => ({
+        file,
+        preview: URL.createObjectURL(file),
+        base64: await fileToBase64(file),
+      }))
+    );
+    setSelectedImages(prev => [...prev, ...newImages]);
+    e.target.value = '';
+  };
+
+  const removeImage = (index: number) => {
+    setSelectedImages(prev => {
+      URL.revokeObjectURL(prev[index].preview);
+      return prev.filter((_, i) => i !== index);
+    });
+  };
 
   const handleImport = async () => {
     if (!textContent.trim()) return;
@@ -344,7 +375,7 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
       const res = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: textContent, sourceType: importType, title: title || undefined }),
+        body: JSON.stringify({ content: textContent, sourceType: 'text', title: title || undefined }),
       });
       const data = await res.json();
       if (data.success) {
@@ -360,33 +391,23 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleImageImport = async () => {
+    if (selectedImages.length === 0) return;
     setLoading(true);
+    setResult(null);
     try {
-      // Convert image to base64 using FileReader (safe for large files)
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          // Remove data:image/xxx;base64, prefix
-          const base64Data = result.split(',')[1];
-          resolve(base64Data);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
-
-      // Send image directly to AI for analysis
+      // Send all images together
+      const imagesData = selectedImages.map(img => ({
+        data: img.base64,
+        mimeType: img.file.type || 'image/png',
+      }));
       const res = await fetch('/api/extract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          imageData: base64,
-          imageMimeType: file.type || 'image/png',
+          images: imagesData,
           sourceType: 'image',
-          title: file.name,
+          title: title || `图片导入 (${selectedImages.length}张)`,
         }),
       });
       const data = await res.json();
@@ -439,14 +460,50 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
-            <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" id="image-upload" />
-            <label htmlFor="image-upload" className="cursor-pointer">
-              <ImageIcon className="w-10 h-10 mx-auto text-muted-foreground mb-2" />
-              <p className="text-sm text-muted-foreground">点击上传图片</p>
-              <p className="text-xs text-muted-foreground mt-1">支持 JPG、PNG、WebP</p>
+          {/* Upload buttons */}
+          <div className="grid grid-cols-2 gap-2">
+            <label className="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors">
+              <input type="file" accept="image/*" multiple onChange={handleFileSelect} className="hidden" />
+              <ImageIcon className="w-8 h-8 mx-auto text-muted-foreground mb-1" />
+              <p className="text-xs text-muted-foreground">从相册选图</p>
+              <p className="text-[10px] text-muted-foreground">支持多选</p>
+            </label>
+            <label className="border-2 border-dashed border-border rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors">
+              <input type="file" accept="image/*" capture="environment" onChange={handleFileSelect} className="hidden" />
+              <Camera className="w-8 h-8 mx-auto text-muted-foreground mb-1" />
+              <p className="text-xs text-muted-foreground">拍照上传</p>
+              <p className="text-[10px] text-muted-foreground">摄像头拍摄</p>
             </label>
           </div>
+
+          {/* Image previews */}
+          {selectedImages.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">已选 {selectedImages.length} 张图片</span>
+                <Button variant="ghost" size="sm" onClick={() => setSelectedImages([])} className="h-6 text-xs text-destructive">
+                  清空
+                </Button>
+              </div>
+              <div className="flex gap-2 overflow-x-auto pb-2">
+                {selectedImages.map((img, i) => (
+                  <div key={i} className="relative shrink-0">
+                    <img src={img.preview} alt={`图片${i + 1}`} className="w-20 h-20 object-cover rounded-lg border border-border" />
+                    <button
+                      onClick={() => removeImage(i)}
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-destructive text-destructive-foreground rounded-full flex items-center justify-center text-xs"
+                    >×</button>
+                  </div>
+                ))}
+              </div>
+              <Input placeholder="标题（可选）" value={title} onChange={(e) => setTitle(e.target.value)} />
+              <Button onClick={handleImageImport} disabled={loading} className="w-full">
+                {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                {loading ? 'AI识别中...' : `识别 ${selectedImages.length} 张图片`}
+              </Button>
+            </div>
+          )}
+
           {loading && (
             <div className="text-center py-4">
               <Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" />
@@ -910,59 +967,83 @@ function WordPopup({ word, open, onClose }: { word: string; open: boolean; onClo
 }
 
 // ===== QUESTION BANK PAGE =====
+type QuestionItem = {
+  id: string;
+  question_text: string;
+  options: Record<string, string>;
+  options_translation?: Record<string, string>;
+  question_translation?: string;
+  socratic_hints?: string[];
+  correct_answer: string;
+  explanation: string;
+  question_type: string;
+  question_type_cn?: string;
+  material_id: string;
+};
+
+type MaterialItem = {
+  id: string;
+  title: string;
+  source_type: string;
+  created_at: string;
+  question_count: number;
+  reading_count: number;
+  cloze_count: number;
+  vocabulary_count: number;
+  translation_count: number;
+  writing_count: number;
+};
+
 function QuestionBankPage() {
-  const [questions, setQuestions] = useState<Array<{
-    id: string;
-    question_text: string;
-    options: Record<string, string>;
-    options_translation?: Record<string, string>;
-    question_translation?: string;
-    socratic_hints?: string[];
-    correct_answer: string;
-    explanation: string;
-    question_type: string;
-    material_id: string;
-    study_materials?: { title?: string } | null;
-  }>>([]);
-  const [filter, setFilter] = useState<string>('all');
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
+  const [view, setView] = useState<'list' | 'detail' | 'quiz' | 'result'>('list');
+  const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedQuestion, setSelectedQuestion] = useState<number | null>(null);
+  const [selectedMaterial, setSelectedMaterial] = useState<MaterialItem | null>(null);
+  const [materialQuestions, setMaterialQuestions] = useState<QuestionItem[]>([]);
+  const [quizQuestions, setQuizQuestions] = useState<QuestionItem[]>([]);
+  const [quizIndex, setQuizIndex] = useState(0);
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
-  const [quizMode, setQuizMode] = useState(false);
-  const [quizQuestions, setQuizQuestions] = useState<typeof questions>([]);
-  const [quizIndex, setQuizIndex] = useState(0);
   const [quizResults, setQuizResults] = useState<Array<{ correct: boolean; questionId: string }>>([]);
-  const pageSize = 20;
 
-  const fetchQuestions = useCallback(async () => {
+  // Fetch materials list
+  const fetchMaterials = useCallback(async () => {
     setLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-      if (filter !== 'all') params.set('type', filter);
-      const res = await fetch(`/api/questions?${params}`);
+      const res = await fetch('/api/materials?pageSize=50');
       const data = await res.json();
-      if (data.success) {
-        setQuestions(data.data || []);
-        setTotal(data.total || 0);
-      }
+      if (data.success) setMaterials(data.data || []);
     } catch { /* ignore */ }
     setLoading(false);
-  }, [page, filter]);
+  }, []);
 
-  useEffect(() => { fetchQuestions(); }, [fetchQuestions]);
+  useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
-  const startQuiz = () => {
-    if (questions.length === 0) return;
-    const shuffled = [...questions].sort(() => Math.random() - 0.5).slice(0, Math.min(10, questions.length));
-    setQuizQuestions(shuffled);
-    setQuizMode(true);
-    setQuizIndex(0);
+  // Fetch questions for a material
+  const openMaterial = async (material: MaterialItem) => {
+    setSelectedMaterial(material);
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/questions?material_id=${material.id}&pageSize=100`);
+      const data = await res.json();
+      if (data.success) setMaterialQuestions(data.data || []);
+    } catch { /* ignore */ }
+    setLoading(false);
+    setView('detail');
+  };
+
+  // Start quiz from material questions
+  const startQuiz = (typeFilter?: string) => {
+    let qs = [...materialQuestions];
+    if (typeFilter && typeFilter !== 'all') {
+      qs = qs.filter(q => q.question_type === typeFilter);
+    }
+    if (qs.length === 0) return;
+    setQuizQuestions(qs);
     setQuizResults([]);
     setSelectedAnswer(null);
     setShowExplanation(false);
+    setView('quiz');
   };
 
   const handleQuizAnswer = async (answer: string) => {
@@ -990,9 +1071,9 @@ function QuestionBankPage() {
     }
   };
 
-  const nextQuizQuestion = () => {
+  const nextQuestion = () => {
     if (quizIndex + 1 >= quizQuestions.length) {
-      // Quiz finished
+      setView('result');
     } else {
       setQuizIndex(prev => prev + 1);
       setSelectedAnswer(null);
@@ -1000,121 +1081,93 @@ function QuestionBankPage() {
     }
   };
 
-  const getQuestionTypeLabel = (type: string) => {
-    const labels: Record<string, string> = { reading: '阅读', vocabulary: '词汇', grammar: '语法' };
-    return labels[type] || type;
-  };
+  const typeLabels: Record<string, string> = { reading: '阅读理解', cloze: '完型填空', vocabulary: '词汇选择', translation: '翻译题', writing: '作文题', grammar: '语法' };
+  const typeColors: Record<string, string> = { reading: 'bg-chart-1/10 text-chart-1', cloze: 'bg-chart-2/10 text-chart-2', vocabulary: 'bg-chart-4/10 text-chart-4', translation: 'bg-chart-3/10 text-chart-3', writing: 'bg-primary/10 text-primary' };
+  const typeIcons: Record<string, string> = { reading: '📖', cloze: '📝', vocabulary: '📚', translation: '🌐', writing: '✍️' };
 
-  const getQuestionTypeColor = (type: string) => {
-    const colors: Record<string, string> = { reading: 'bg-chart-1/10 text-chart-1', vocabulary: 'bg-chart-2/10 text-chart-2', grammar: 'bg-chart-4/10 text-chart-4' };
-    return colors[type] || 'bg-muted text-muted-foreground';
-  };
-
-  // Quiz result view
-  if (quizMode && quizIndex >= quizQuestions.length) {
+  // ===== Result View =====
+  if (view === 'result') {
     const correctCount = quizResults.filter(r => r.correct).length;
     const accuracy = quizResults.length > 0 ? Math.round((correctCount / quizResults.length) * 100) : 0;
     return (
       <div className="p-4 space-y-4">
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setQuizMode(false)}>
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            返回题库
-          </Button>
-        </div>
-        <h2 className="text-lg font-bold">刷题结果</h2>
+        <h2 className="text-lg font-bold">测试结果</h2>
         <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-primary/10">
           <CardContent className="p-6 text-center">
             <div className="text-4xl font-bold text-primary">{accuracy}%</div>
             <p className="text-sm text-muted-foreground mt-1">正确率</p>
             <div className="flex justify-center gap-6 mt-4">
-              <div>
-                <p className="text-2xl font-bold text-primary">{correctCount}</p>
-                <p className="text-xs text-muted-foreground">正确</p>
-              </div>
-              <div>
-                <p className="text-2xl font-bold text-destructive">{quizResults.length - correctCount}</p>
-                <p className="text-xs text-muted-foreground">错误</p>
-              </div>
+              <div><p className="text-2xl font-bold text-primary">{correctCount}</p><p className="text-xs text-muted-foreground">正确</p></div>
+              <div><p className="text-2xl font-bold text-destructive">{quizResults.length - correctCount}</p><p className="text-xs text-muted-foreground">错误</p></div>
             </div>
           </CardContent>
         </Card>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setQuizMode(false)} className="flex-1">
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            返回题库
+          <Button variant="outline" onClick={() => setView('detail')} className="flex-1">
+            <ArrowLeft className="w-4 h-4 mr-2" />返回题目
           </Button>
-          <Button onClick={startQuiz} className="flex-1">
-            <RotateCcw className="w-4 h-4 mr-2" />
-            再来一轮
+          <Button onClick={() => startQuiz()} className="flex-1">
+            <RotateCcw className="w-4 h-4 mr-2" />再做一次
           </Button>
         </div>
       </div>
     );
   }
 
-  // Quiz in progress
-  if (quizMode && quizQuestions[quizIndex]) {
+  // ===== Quiz View =====
+  if (view === 'quiz' && quizQuestions[quizIndex]) {
     const q = quizQuestions[quizIndex];
-    const qHints = q.socratic_hints || [];
+    const hints = q.socratic_hints || [];
     return (
       <div className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setQuizMode(false)}>
-            <ArrowLeft className="w-4 h-4 mr-1" />
-            退出
+          <Button variant="ghost" size="sm" onClick={() => setView('detail')}>
+            <ArrowLeft className="w-4 h-4 mr-1" />退出
           </Button>
           <span className="text-sm text-muted-foreground">{quizIndex + 1}/{quizQuestions.length}</span>
           <Progress value={((quizIndex + 1) / quizQuestions.length) * 100} className="flex-1" />
+          <Badge variant="secondary" className="text-xs">{typeLabels[q.question_type] || q.question_type}</Badge>
         </div>
 
         <Card>
           <CardContent className="p-5">
-            <Badge variant="secondary" className="mb-3">{getQuestionTypeLabel(q.question_type)}</Badge>
             <p className="text-base font-medium">{q.question_text}</p>
             {q.question_translation && <p className="text-xs text-muted-foreground mt-1">{q.question_translation}</p>}
           </CardContent>
         </Card>
 
-        {/* Socratic Hints (before answering) */}
-        {!selectedAnswer && qHints.length > 0 && (
+        {!selectedAnswer && hints.length > 0 && (
           <Card className="bg-chart-4/5 border-chart-4/20">
-            <CardContent className="p-3 space-y-2">
-              <p className="text-xs font-medium text-chart-4">💡 思考引导</p>
-              <p className="text-sm">{qHints[0]}</p>
+            <CardContent className="p-3">
+              <p className="text-xs font-medium text-chart-4 mb-1">💡 思考引导</p>
+              <p className="text-sm">{hints[0]}</p>
             </CardContent>
           </Card>
         )}
 
         <div className="space-y-2">
-          {Object.entries(q.options as Record<string, string>).map(([key, value]) => {
+          {Object.entries(q.options).map(([key, value]) => {
             const isSelected = selectedAnswer === key;
             const isCorrect = key === q.correct_answer;
-            let optionClass = 'border-border hover:border-primary/50';
+            let cls = 'border-border hover:border-primary/50';
             if (selectedAnswer) {
-              if (isCorrect) optionClass = 'border-primary bg-primary/5';
-              else if (isSelected) optionClass = 'border-destructive bg-destructive/5';
+              if (isCorrect) cls = 'border-primary bg-primary/5';
+              else if (isSelected) cls = 'border-destructive bg-destructive/5';
             }
-            const optTranslation = q.options_translation?.[key];
             return (
-              <Card
-                key={key}
-                className={`cursor-pointer transition-all ${optionClass} ${!selectedAnswer ? 'active:scale-[0.99]' : ''}`}
-                onClick={() => !selectedAnswer && handleQuizAnswer(key)}
-              >
+              <Card key={key} className={`cursor-pointer transition-all ${cls}`} onClick={() => handleQuizAnswer(key)}>
                 <CardContent className="p-3">
                   <div className="flex items-center gap-3">
                     <span className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
                       selectedAnswer && isCorrect ? 'bg-primary text-primary-foreground' :
-                      selectedAnswer && isSelected ? 'bg-destructive text-destructive-foreground' :
-                      'bg-muted text-muted-foreground'
+                      selectedAnswer && isSelected ? 'bg-destructive text-destructive-foreground' : 'bg-muted text-muted-foreground'
                     }`}>
                       {selectedAnswer && isCorrect ? <CheckCircle2 className="w-4 h-4" /> :
                        selectedAnswer && isSelected ? <XCircle className="w-4 h-4" /> : key}
                     </span>
                     <span className="text-sm">{value}</span>
                   </div>
-                  {optTranslation && <p className="text-xs text-muted-foreground ml-10 mt-0.5">{optTranslation}</p>}
+                  {q.options_translation?.[key] && <p className="text-xs text-muted-foreground ml-10 mt-0.5">{q.options_translation[key]}</p>}
                 </CardContent>
               </Card>
             );
@@ -1125,19 +1178,17 @@ function QuestionBankPage() {
           <>
             <Card className="border-primary/20 bg-primary/5">
               <CardContent className="p-4 text-sm">
-                <p className="font-medium mb-1">{selectedAnswer === q.correct_answer ? '✅ 回答正确!' : '❌ 回答错误'}</p>
+                <p className="font-medium mb-1">{selectedAnswer === q.correct_answer ? '✅ 正确!' : '❌ 错误'}</p>
                 <p className="text-muted-foreground">{q.explanation}</p>
-                {qHints.length > 1 && (
+                {hints.length > 1 && (
                   <details className="mt-2 text-xs">
-                    <summary className="cursor-pointer text-muted-foreground">查看完整引导</summary>
-                    <div className="mt-1 space-y-1">
-                      {qHints.map((h: string, i: number) => <p key={i} className="text-muted-foreground">{h}</p>)}
-                    </div>
+                    <summary className="cursor-pointer text-muted-foreground">完整引导</summary>
+                    <div className="mt-1 space-y-1">{hints.map((h, i) => <p key={i}>{h}</p>)}</div>
                   </details>
                 )}
               </CardContent>
             </Card>
-            <Button onClick={nextQuizQuestion} className="w-full">
+            <Button onClick={nextQuestion} className="w-full">
               {quizIndex + 1 >= quizQuestions.length ? '查看结果' : '下一题'}
               <ChevronRight className="w-4 h-4 ml-1" />
             </Button>
@@ -1147,110 +1198,131 @@ function QuestionBankPage() {
     );
   }
 
-  // Question bank list view
-  return (
-    <div className="p-4 space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold">题库</h2>
-        <Button size="sm" onClick={startQuiz} disabled={questions.length === 0}>
-          <Play className="w-4 h-4 mr-1" />
-          开始刷题
-        </Button>
-      </div>
+  // ===== Detail View (套题详情) =====
+  if (view === 'detail' && selectedMaterial) {
+    // Group questions by type
+    const grouped: Record<string, QuestionItem[]> = {};
+    for (const q of materialQuestions) {
+      const type = q.question_type || 'reading';
+      if (!grouped[type]) grouped[type] = [];
+      grouped[type].push(q);
+    }
+    const typeOrder = ['reading', 'cloze', 'vocabulary', 'translation', 'writing'];
 
-      <Tabs value={filter} onValueChange={(v) => { setFilter(v); setPage(1); }}>
-        <TabsList className="w-full">
-          <TabsTrigger value="all" className="flex-1 text-xs">全部</TabsTrigger>
-          <TabsTrigger value="reading" className="flex-1 text-xs">阅读</TabsTrigger>
-          <TabsTrigger value="vocabulary" className="flex-1 text-xs">词汇</TabsTrigger>
-          <TabsTrigger value="grammar" className="flex-1 text-xs">语法</TabsTrigger>
-        </TabsList>
-      </Tabs>
-
-      <p className="text-xs text-muted-foreground">共 {total} 道题</p>
-
-      {loading ? (
-        <div className="text-center py-8">
-          <Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" />
+    return (
+      <div className="p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => { setView('list'); setSelectedMaterial(null); }}>
+            <ArrowLeft className="w-4 h-4 mr-1" />返回题库
+          </Button>
         </div>
-      ) : questions.length === 0 ? (
+
         <Card>
-          <CardContent className="p-8 text-center text-muted-foreground">
-            <BookMarked className="w-10 h-10 mx-auto mb-2 text-muted-foreground/50" />
-            <p className="text-sm">题库为空，请先导入学习材料</p>
-            <Button variant="outline" size="sm" className="mt-3" onClick={() => {
-              const event = new CustomEvent('navigate', { detail: 'import' });
-              window.dispatchEvent(event);
-            }}>
-              <Upload className="w-4 h-4 mr-1" />
-              去导入
-            </Button>
+          <CardContent className="p-4">
+            <h2 className="text-base font-bold">{selectedMaterial.title}</h2>
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {Object.entries(grouped).map(([type, qs]) => (
+                <Badge key={type} className={typeColors[type] || 'bg-muted'} variant="secondary">
+                  {typeIcons[type] || '📋'} {typeLabels[type] || type} ×{qs.length}
+                </Badge>
+              ))}
+            </div>
           </CardContent>
         </Card>
-      ) : (
-        <>
-          <div className="space-y-2">
-            {questions.map((q, i) => (
-              <Card
-                key={q.id}
-                className="cursor-pointer hover:shadow-sm transition-shadow active:scale-[0.99]"
-                onClick={() => setSelectedQuestion(selectedQuestion === i ? null : i)}
-              >
-                <CardContent className="p-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <Badge className={getQuestionTypeColor(q.question_type)} variant="secondary">
-                          {getQuestionTypeLabel(q.question_type)}
-                        </Badge>
-                        {q.study_materials?.title && (
-                          <span className="text-[10px] text-muted-foreground truncate">{q.study_materials.title}</span>
-                        )}
-                      </div>
-                      <p className="text-sm line-clamp-2">{q.question_text}</p>
-                    </div>
-                    <ChevronRight className={`w-4 h-4 text-muted-foreground shrink-0 transition-transform ${selectedQuestion === i ? 'rotate-90' : ''}`} />
-                  </div>
 
-                  {selectedQuestion === i && (
-                    <div className="mt-3 pt-3 border-t border-border space-y-2">
-                      {Object.entries(q.options as Record<string, string>).map(([key, value]) => (
-                        <div key={key} className={`flex items-center gap-2 text-sm p-2 rounded ${
-                          key === q.correct_answer ? 'bg-primary/5 text-primary' : ''
-                        }`}>
-                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                            key === q.correct_answer ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
-                          }`}>{key}</span>
-                          <span>{value}</span>
-                          {key === q.correct_answer && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-auto" />}
-                        </div>
-                      ))}
-                      {q.explanation && (
-                        <div className="text-xs text-muted-foreground p-2 bg-muted/30 rounded">
-                          <span className="font-medium">解析: </span>{q.explanation}
-                        </div>
-                      )}
-                    </div>
-                  )}
+        {/* Start quiz buttons */}
+        <div className="grid grid-cols-2 gap-2">
+          <Button onClick={() => startQuiz('all')} className="w-full">
+            <Play className="w-4 h-4 mr-1" />全部重做 ({materialQuestions.length}题)
+          </Button>
+          {Object.entries(grouped).map(([type, qs]) => (
+            <Button key={type} variant="outline" onClick={() => startQuiz(type)} className="w-full">
+              {typeIcons[type] || '📋'} {typeLabels[type] || type} ({qs.length}题)
+            </Button>
+          ))}
+        </div>
+
+        {/* Questions grouped by type */}
+        {typeOrder.filter(t => grouped[t]).map(type => (
+          <div key={type} className="space-y-2">
+            <h3 className="text-sm font-bold flex items-center gap-1.5">
+              {typeIcons[type] || '📋'} {typeLabels[type] || type}
+              <Badge variant="secondary" className="text-xs">{grouped[type].length}题</Badge>
+            </h3>
+            {grouped[type].map((q, i) => (
+              <Card key={q.id}>
+                <CardContent className="p-3 space-y-2">
+                  <p className="text-sm font-medium">{i + 1}. {q.question_text}</p>
+                  {q.question_translation && <p className="text-xs text-muted-foreground">{q.question_translation}</p>}
+                  <div className="grid grid-cols-2 gap-1">
+                    {Object.entries(q.options).map(([key, value]) => (
+                      <div key={key} className={`text-xs p-1.5 rounded ${key === q.correct_answer ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'}`}>
+                        {key}. {value}
+                        {q.options_translation?.[key] && <span className="ml-1 opacity-70">({q.options_translation[key]})</span>}
+                      </div>
+                    ))}
+                  </div>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">查看解析</summary>
+                    <div className="mt-1 p-2 bg-muted/30 rounded">{q.explanation}</div>
+                    {q.socratic_hints && q.socratic_hints.length > 0 && (
+                      <div className="mt-1 p-2 bg-chart-4/5 rounded">
+                        <p className="font-medium text-chart-4 mb-1">💡 引导</p>
+                        {q.socratic_hints.map((h, hi) => <p key={hi}>{h}</p>)}
+                      </div>
+                    )}
+                  </details>
                 </CardContent>
               </Card>
             ))}
           </div>
+        ))}
+      </div>
+    );
+  }
 
-          {total > pageSize && (
-            <div className="flex justify-center gap-2">
-              <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
-                上一页
-              </Button>
-              <span className="text-sm text-muted-foreground self-center">
-                {page}/{Math.ceil(total / pageSize)}
-              </span>
-              <Button variant="outline" size="sm" disabled={page >= Math.ceil(total / pageSize)} onClick={() => setPage(page + 1)}>
-                下一页
-              </Button>
-            </div>
-          )}
-        </>
+  // ===== List View (套题列表) =====
+  return (
+    <div className="p-4 space-y-4">
+      <h2 className="text-lg font-bold">题库</h2>
+      <p className="text-xs text-muted-foreground">共 {materials.length} 套题</p>
+
+      {loading ? (
+        <div className="text-center py-8"><Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /></div>
+      ) : materials.length === 0 ? (
+        <Card>
+          <CardContent className="p-8 text-center text-muted-foreground">
+            <BookMarked className="w-10 h-10 mx-auto mb-2 text-muted-foreground/50" />
+            <p className="text-sm">题库为空，请先导入学习材料</p>
+            <p className="text-xs mt-1">支持粘贴文章、上传图片、拍照</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {materials.map(m => (
+            <Card key={m.id} className="cursor-pointer hover:shadow-md transition-shadow active:scale-[0.99]" onClick={() => openMaterial(m)}>
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-base">{m.source_type === 'image' ? '📷' : '📄'}</span>
+                      <h3 className="font-medium text-sm truncate">{m.title}</h3>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge variant="secondary" className="text-xs">共 {m.question_count} 题</Badge>
+                      {m.reading_count > 0 && <Badge className="text-[10px] bg-chart-1/10 text-chart-1">📖阅读 {m.reading_count}</Badge>}
+                      {m.cloze_count > 0 && <Badge className="text-[10px] bg-chart-2/10 text-chart-2">📝完型 {m.cloze_count}</Badge>}
+                      {m.vocabulary_count > 0 && <Badge className="text-[10px] bg-chart-4/10 text-chart-4">📚词汇 {m.vocabulary_count}</Badge>}
+                      {m.translation_count > 0 && <Badge className="text-[10px] bg-chart-3/10 text-chart-3">🌐翻译 {m.translation_count}</Badge>}
+                      {m.writing_count > 0 && <Badge className="text-[10px] bg-primary/10 text-primary">✍️作文 {m.writing_count}</Badge>}
+                    </div>
+                  </div>
+                  <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" />
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       )}
     </div>
   );

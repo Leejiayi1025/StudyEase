@@ -4,76 +4,88 @@ import { getPool, uuid } from "@/storage/database/mysql-client";
 
 export async function POST(request: NextRequest) {
   try {
-    const { content, imageData, imageMimeType, sourceType, title } = await request.json();
+    const { content, imageData, imageMimeType, images, sourceType, title } = await request.json();
 
-    if (!content && !imageData) {
+    // Support: text, single image (legacy), or multiple images
+    const imageList: Array<{ data: string; mimeType: string }> = images || (imageData ? [{ data: imageData, mimeType: imageMimeType || 'image/png' }] : []);
+
+    if (!content && imageList.length === 0) {
       return NextResponse.json({ error: "请提供文本内容或图片" }, { status: 400 });
     }
 
-    const systemPrompt = `你是英语学习分析专家。对给定的英语文本做全面分析。
+    const systemPrompt = `你是英语学习分析专家，熟悉四六级考试题型。对给定的英语文本/图片做全面分析。
 
 严格按以下JSON格式返回，不要添加其他文字：
 {
   "article": {
-    "original": "完整英文原文（清理排版后）",
+    "original": "完整英文原文",
     "translation": "完整中文翻译",
-    "sentences": [
-      {"english": "英文句子1", "chinese": "中文翻译1"},
-      {"english": "英文句子2", "chinese": "中文翻译2"}
-    ]
+    "sentences": [{"english":"英文句子","chinese":"中文翻译"}]
   },
   "questions": [
     {
       "question_text": "题目英文",
       "question_translation": "题目中文翻译",
-      "options": {"A": "英文选项A", "B": "英文选项B", "C": "英文选项C", "D": "英文选项D"},
-      "options_translation": {"A": "中文翻译A", "B": "中文翻译B", "C": "中文翻译C", "D": "中文翻译D"},
+      "question_type": "reading/cloze/vocabulary/translation/writing",
+      "question_type_cn": "阅读理解/完型填空/词汇选择/翻译题/作文",
+      "options": {"A":"","B":"","C":"","D":""},
+      "options_translation": {"A":"","B":"","C":"","D":""},
       "correct_answer": "A",
-      "explanation": "答案解析（英文+中文）",
-      "socratic_hints": [
-        "Think about what the passage says about... (想想文章中关于...说了什么)",
-        "Look back at paragraph X where it mentions... (回到第X段，它提到了...)",
-        "Can you find a keyword in the question that matches the passage? (你能找到题目中和文章对应的关键词吗？)"
-      ]
+      "explanation": "解析（英文+中文）",
+      "socratic_hints": ["引导问题1 (中文翻译)", "引导问题2 (中文翻译)"]
     }
   ],
   "vocabulary": [
     {
-      "word": "单词",
-      "phonetic": "音标",
-      "part_of_speech": "词性",
-      "meaning": "中文释义",
-      "example_sentence": "来自原文的例句",
-      "example_translation": "例句翻译",
-      "source": "article/question/option",
-      "common_phrases": [{"phrase": "搭配", "meaning": "释义"}],
-      "word_forms": {"past": "过去式", "past_participle": "过去分词", "gerund": "现在分词"}
+      "word":"单词","phonetic":"音标","part_of_speech":"词性","meaning":"中文释义",
+      "example_sentence":"原文例句","example_translation":"翻译",
+      "source":"article/question/option",
+      "common_phrases":[{"phrase":"搭配","meaning":"释义"}],
+      "word_forms":{"past":"过去式","past_participle":"过去分词"}
     }
   ]
 }
 
-重要规则：
-1. 文章：完整保留原文，逐句翻译
-2. 题目：每道题的选项必须翻译成中文
-3. 苏格拉底提示：每道题给出3条英文引导问题（附中文翻译），引导用户思考，不要直接告诉答案
-4. 单词：提取文章、题目、选项中所有值得学习的词汇，标注来源
-5. 如果是图片，先OCR识别文字再分析`;
+题型分类规则：
+- reading: 阅读理解（根据文章回答问题）
+- cloze: 完型填空（文章中有空格需要选词填入）
+- vocabulary: 词汇选择（词义辨析、选词填空）
+- translation: 翻译题（中译英或英译中）
+- writing: 作文题（给出写作任务）
 
-    // Build user message
+重要：
+1. 选项必须翻译成中文
+2. 每道题给出2-3条苏格拉底式引导问题（英文+中文翻译）
+3. 提取文章/题目/选项中所有值得学习的单词
+4. 如果是图片，先OCR识别所有文字再分析`;
+
+    // Build user content
     let userContent: string | LLMContentBlock[];
-    if (imageData) {
-      const mediaType = (imageMimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-      userContent = [
-        { type: 'image' as const, source: { type: 'base64' as const, media_type: mediaType, data: imageData } },
-        { type: 'text' as const, text: content ? `识别图片并分析。补充：${content}` : '识别图片中的英文文本，做全面分析：逐句翻译、提取所有生词、出题并给出苏格拉底式引导。' },
-      ];
+
+    if (imageList.length > 0) {
+      // Multiple images mode
+      const blocks: LLMContentBlock[] = [];
+      for (const img of imageList) {
+        const mediaType = (img.mimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+        blocks.push({
+          type: 'image' as const,
+          source: { type: 'base64' as const, media_type: mediaType, data: img.data },
+        });
+      }
+      blocks.push({
+        type: 'text' as const,
+        text: content
+          ? `识别图片中的英文文本并分析。补充：${content}`
+          : `识别这些图片中的所有英文文本。这些可能是四六级考试题目（阅读理解、完型填空、词汇选择、翻译题等）。请：1)识别所有文字 2)按题型分类 3)逐句翻译 4)提取所有生词 5)给出苏格拉底式引导`,
+      });
+      userContent = blocks;
     } else {
-      userContent = `分析以下英语文本：\n\n${content}`;
+      userContent = `分析以下英语文本（可能是四六级考试题）：\n\n${content}`;
     }
 
-    // 文本用 DeepSeek V3，图片用 Qwen2.5-VL
-    const llmOptions = imageData
-      ? { temperature: 0.2, maxTokens: 6144, model: process.env.DASHSCOPE_VL_MODEL || 'qwen-vl-max' }
+    // Text用 DeepSeek V3，图片用 Qwen-VL
+    const llmOptions = imageList.length > 0
+      ? { temperature: 0.2, maxTokens: 6144, model: process.env.DASHSCOPE_VL_MODEL || 'qwen-vl-plus' }
       : { temperature: 0.2, maxTokens: 6144 };
 
     const responseContent = await callLLM(
@@ -86,20 +98,32 @@ export async function POST(request: NextRequest) {
       const jsonMatch = responseContent.match(/\{[\s\S]*\}/);
       analysisResult = jsonMatch ? JSON.parse(jsonMatch[0]) : { article: null, questions: [], vocabulary: [] };
     } catch {
-      analysisResult = { article: { original: content, translation: '', sentences: [] }, questions: [], vocabulary: [], summary: responseContent };
+      analysisResult = { article: { original: content || '', translation: '', sentences: [] }, questions: [], vocabulary: [] };
+    }
+
+    // Auto-categorize questions if AI didn't
+    if (analysisResult.questions) {
+      for (const q of analysisResult.questions) {
+        if (!q.question_type) q.question_type = 'reading';
+        if (!q.question_type_cn) {
+          const typeMap: Record<string, string> = { reading: '阅读理解', cloze: '完型填空', vocabulary: '词汇选择', translation: '翻译题', writing: '作文题' };
+          q.question_type_cn = typeMap[q.question_type] || '阅读理解';
+        }
+      }
     }
 
     // Save to database
     const pool = getPool();
     const materialId = uuid();
-    const materialTitle = title || (imageData ? "图片导入" : "导入学习材料");
+    const materialTitle = title || (imageList.length > 0 ? `图片导入 (${imageList.length}张)` : '导入学习材料');
+    const materialContent = content || `[图片导入 ${imageList.length}张]`;
 
     await pool.execute(
       `INSERT INTO study_materials (id, title, content, source_type, analysis) VALUES (?, ?, ?, ?, ?)`,
-      [materialId, materialTitle, content || "[图片导入]", sourceType || (imageData ? "image" : "text"), JSON.stringify(analysisResult)]
+      [materialId, materialTitle, materialContent, sourceType || (imageList.length > 0 ? 'image' : 'text'), JSON.stringify(analysisResult)]
     );
 
-    // Save questions (with socratic hints)
+    // Save questions with type classification
     if (analysisResult.questions?.length > 0) {
       for (const q of analysisResult.questions) {
         await pool.execute(
@@ -112,27 +136,26 @@ export async function POST(request: NextRequest) {
               options_translation: q.options_translation,
               question_translation: q.question_translation,
               socratic_hints: q.socratic_hints,
+              question_type_cn: q.question_type_cn,
             }),
-            q.correct_answer, q.explanation, q.question_type || "reading",
+            q.correct_answer, q.explanation, q.question_type || 'reading',
             JSON.stringify({ socratic_hints: q.socratic_hints }),
           ]
         );
       }
     }
 
-    // Save ALL vocabulary (upsert)
+    // Save vocabulary (upsert)
     if (analysisResult.vocabulary?.length > 0) {
       for (const vocab of analysisResult.vocabulary) {
         const [existing] = await pool.execute(`SELECT id FROM vocabulary WHERE word = ? LIMIT 1`, [vocab.word]);
         const existingRow = (existing as Record<string, unknown>[])[0];
-
         const vocabData = [
           vocab.phonetic || null, vocab.part_of_speech || null, vocab.meaning,
           vocab.example_sentence || null, vocab.example_translation || null,
           vocab.common_phrases ? JSON.stringify(vocab.common_phrases) : null,
           vocab.word_forms ? JSON.stringify(vocab.word_forms) : null,
         ];
-
         if (existingRow) {
           await pool.execute(`UPDATE vocabulary SET phonetic=?, part_of_speech=?, meaning=?, example_sentence=?, example_translation=?, common_phrases=?, word_forms=? WHERE id=?`, [...vocabData, existingRow.id]);
         } else {
