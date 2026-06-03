@@ -1138,6 +1138,9 @@ function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => voi
   const [selectedAnswer, setSelectedAnswer] = useState<string | null>(null);
   const [showExplanation, setShowExplanation] = useState(false);
   const [quizResults, setQuizResults] = useState<Array<{ correct: boolean; questionId: string }>>([]);
+  const [materialArticle, setMaterialArticle] = useState<{ original?: string; translation?: string; sentences?: Array<{ english: string; chinese: string }> } | null>(null);
+  const [searchText, setSearchText] = useState('');
+  const [showFavorite, setShowFavorite] = useState(false);
 
   // Fetch materials list
   const fetchMaterials = useCallback(async () => {
@@ -1153,8 +1156,6 @@ function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => voi
   useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
   // Fetch questions for a material
-  const [materialArticle, setMaterialArticle] = useState<{ original?: string; translation?: string; sentences?: Array<{ english: string; chinese: string }> } | null>(null);
-
   const openMaterial = async (material: MaterialItem) => {
     setSelectedMaterial(material);
     setLoading(true);
@@ -1489,9 +1490,6 @@ function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => voi
       setMaterials(prev => prev.map(m => m.id === id ? { ...m, is_favorite: newVal } : m));
     } catch { /* ignore */ }
   };
-
-  const [searchText, setSearchText] = useState('');
-  const [showFavorite, setShowFavorite] = useState(false);
 
   const filteredMaterials = materials.filter(m => {
     if (showFavorite && !m.is_favorite) return false;
