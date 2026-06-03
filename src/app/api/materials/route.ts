@@ -1,17 +1,43 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPool } from "@/storage/database/mysql-client";
 
-// GET /api/materials - 获取所有导入的材料（套题列表）
+// GET /api/materials - 获取材料列表，或单个材料详情
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    const materialId = searchParams.get("id");
     const page = parseInt(searchParams.get("page") || "1");
     const pageSize = parseInt(searchParams.get("pageSize") || "20");
 
     const pool = getPool();
-    const offset = (page - 1) * pageSize;
 
-    // Get materials with question counts by type
+    // Single material detail
+    if (materialId) {
+      const [rows] = await pool.execute(
+        `SELECT id, title, content, source_type, analysis, created_at FROM study_materials WHERE id = ? LIMIT 1`,
+        [materialId]
+      );
+      const material = (rows as Record<string, unknown>[])[0];
+      if (!material) {
+        return NextResponse.json({ error: "材料不存在" }, { status: 404 });
+      }
+
+      // Parse analysis JSON
+      const analysis = typeof material.analysis === 'string'
+        ? JSON.parse(material.analysis as string)
+        : material.analysis;
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          ...material,
+          analysis,
+        },
+      });
+    }
+
+    // List materials with question counts
+    const offset = (page - 1) * pageSize;
     const [rows] = await pool.execute(
       `SELECT sm.id, sm.title, sm.source_type, sm.created_at,
               COUNT(q.id) as question_count,

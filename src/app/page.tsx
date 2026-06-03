@@ -170,7 +170,7 @@ export default function StudyApp() {
       <main className="flex-1 overflow-y-auto pb-20">
         {activeTab === 'home' && <HomePage stats={stats} onNavigate={setActiveTab} />}
         {activeTab === 'import' && <ImportPage onDone={fetchProgress} onWordClick={handleWordClick} />}
-        {activeTab === 'questions' && <QuestionBankPage />}
+        {activeTab === 'questions' && <QuestionBankPage onWordClick={handleWordClick} />}
         {activeTab === 'vocabulary' && <VocabularyPage onWordClick={handleWordClick} />}
         {activeTab === 'quiz' && <QuizPage onWordClick={handleWordClick} />}
         {activeTab === 'mistakes' && <MistakesPage />}
@@ -998,7 +998,7 @@ type MaterialItem = {
   writing_count: number;
 };
 
-function QuestionBankPage() {
+function QuestionBankPage({ onWordClick }: { onWordClick?: (word: string) => void }) {
   const [view, setView] = useState<'list' | 'detail' | 'quiz' | 'result'>('list');
   const [materials, setMaterials] = useState<MaterialItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1024,13 +1024,25 @@ function QuestionBankPage() {
   useEffect(() => { fetchMaterials(); }, [fetchMaterials]);
 
   // Fetch questions for a material
+  const [materialArticle, setMaterialArticle] = useState<{ original?: string; translation?: string; sentences?: Array<{ english: string; chinese: string }> } | null>(null);
+
   const openMaterial = async (material: MaterialItem) => {
     setSelectedMaterial(material);
     setLoading(true);
     try {
-      const res = await fetch(`/api/questions?material_id=${material.id}&pageSize=100`);
-      const data = await res.json();
-      if (data.success) setMaterialQuestions(data.data || []);
+      // Fetch material detail (with article) and questions in parallel
+      const [materialRes, questionsRes] = await Promise.all([
+        fetch(`/api/materials?id=${material.id}`),
+        fetch(`/api/questions?material_id=${material.id}&pageSize=100`),
+      ]);
+      const materialData = await materialRes.json();
+      const questionsData = await questionsRes.json();
+
+      if (materialData.success && materialData.data?.analysis) {
+        const analysis = materialData.data.analysis;
+        setMaterialArticle(analysis.article || null);
+      }
+      if (questionsData.success) setMaterialQuestions(questionsData.data || []);
     } catch { /* ignore */ }
     setLoading(false);
     setView('detail');
@@ -1202,9 +1214,8 @@ function QuestionBankPage() {
     );
   }
 
-  // ===== Detail View (套题详情) =====
+  // ===== Detail View (完整试卷) =====
   if (view === 'detail' && selectedMaterial) {
-    // Group questions by type
     const grouped: Record<string, QuestionItem[]> = {};
     for (const q of materialQuestions) {
       const type = q.question_type || 'reading';
@@ -1216,65 +1227,112 @@ function QuestionBankPage() {
     return (
       <div className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => { setView('list'); setSelectedMaterial(null); }}>
+          <Button variant="ghost" size="sm" onClick={() => { setView('list'); setSelectedMaterial(null); setMaterialArticle(null); }}>
             <ArrowLeft className="w-4 h-4 mr-1" />返回题库
           </Button>
+          <span className="text-sm font-medium flex-1 truncate">{selectedMaterial.title}</span>
         </div>
 
-        <Card>
-          <CardContent className="p-4">
-            <h2 className="text-base font-bold">{selectedMaterial.title}</h2>
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {Object.entries(grouped).map(([type, qs]) => (
-                <Badge key={type} className={typeColors[type] || 'bg-muted'} variant="secondary">
-                  {typeIcons[type] || '📋'} {typeLabels[type] || type} ×{qs.length}
-                </Badge>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Start quiz buttons */}
-        <div className="grid grid-cols-2 gap-2">
-          <Button onClick={() => startQuiz('all')} className="w-full">
+        {/* Action buttons */}
+        <div className="flex gap-2">
+          <Button onClick={() => startQuiz('all')} size="sm" className="flex-1">
             <Play className="w-4 h-4 mr-1" />全部重做 ({materialQuestions.length}题)
           </Button>
-          {Object.entries(grouped).map(([type, qs]) => (
-            <Button key={type} variant="outline" onClick={() => startQuiz(type)} className="w-full">
-              {typeIcons[type] || '📋'} {typeLabels[type] || type} ({qs.length}题)
+          {Object.entries(grouped).filter(([, qs]) => qs.length > 0).map(([type, qs]) => (
+            <Button key={type} variant="outline" size="sm" onClick={() => startQuiz(type)}>
+              {typeIcons[type] || '📋'} {typeLabels[type] || type} ({qs.length})
             </Button>
           ))}
         </div>
 
-        {/* Questions grouped by type */}
+        {/* ===== Complete Article ===== */}
+        {materialArticle && (
+          <Card className="border-primary/20">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2">
+                📖 原文
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {/* Full article text */}
+              {materialArticle.sentences && materialArticle.sentences.length > 0 ? (
+                <div className="space-y-2">
+                  {materialArticle.sentences.map((s, i) => (
+                    <div key={i} className="border-l-2 border-primary/20 pl-3">
+                      <p className="text-sm leading-relaxed"><ClickableText text={s.english} onWordClick={(w) => onWordClick?.(w)} /></p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{s.chinese}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : materialArticle.original ? (
+                <div className="space-y-2">
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap"><ClickableText text={materialArticle.original} onWordClick={(w) => onWordClick?.(w)} /></p>
+                  {materialArticle.translation && (
+                    <div className="pt-2 border-t border-border">
+                      <p className="text-xs text-muted-foreground whitespace-pre-wrap">{materialArticle.translation}</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ===== Complete Questions ===== */}
         {typeOrder.filter(t => grouped[t]).map(type => (
-          <div key={type} className="space-y-2">
+          <div key={type} className="space-y-3">
             <h3 className="text-sm font-bold flex items-center gap-1.5">
               {typeIcons[type] || '📋'} {typeLabels[type] || type}
               <Badge variant="secondary" className="text-xs">{grouped[type].length}题</Badge>
             </h3>
             {grouped[type].map((q, i) => (
-              <Card key={q.id}>
-                <CardContent className="p-3 space-y-2">
-                  <p className="text-sm font-medium">{i + 1}. {q.question_text}</p>
-                  {q.question_translation && <p className="text-xs text-muted-foreground">{q.question_translation}</p>}
-                  <div className="grid grid-cols-2 gap-1">
+              <Card key={q.id} className="border-border/50">
+                <CardContent className="p-4 space-y-3">
+                  {/* Question text */}
+                  <div>
+                    <p className="text-sm font-medium">
+                      <span className="text-primary mr-1">{i + 1}.</span>
+                      <ClickableText text={q.question_text} onWordClick={(w) => onWordClick?.(w)} />
+                    </p>
+                    {q.question_translation && <p className="text-xs text-muted-foreground mt-1">{q.question_translation}</p>}
+                  </div>
+
+                  {/* Options with translations */}
+                  <div className="space-y-1.5">
                     {Object.entries(q.options).map(([key, value]) => (
-                      <div key={key} className={`text-xs p-1.5 rounded ${key === q.correct_answer ? 'bg-primary/10 text-primary font-medium' : 'text-muted-foreground'}`}>
-                        {key}. {value}
-                        {q.options_translation?.[key] && <span className="ml-1 opacity-70">({q.options_translation[key]})</span>}
+                      <div key={key} className={`text-sm p-2 rounded border ${
+                        key === q.correct_answer ? 'border-primary/30 bg-primary/5' : 'border-border/50'
+                      }`}>
+                        <div className="flex items-start gap-2">
+                          <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                            key === q.correct_answer ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                          }`}>{key}</span>
+                          <div className="flex-1 min-w-0">
+                            <p><ClickableText text={value} onWordClick={(w) => onWordClick?.(w)} /></p>
+                            {q.options_translation?.[key] && (
+                              <p className="text-xs text-muted-foreground mt-0.5">{q.options_translation[key]}</p>
+                            )}
+                          </div>
+                          {key === q.correct_answer && <CheckCircle2 className="w-4 h-4 text-primary shrink-0 mt-0.5" />}
+                        </div>
                       </div>
                     ))}
                   </div>
+
+                  {/* Explanation */}
                   <details className="text-xs">
-                    <summary className="cursor-pointer text-muted-foreground">查看解析</summary>
-                    <div className="mt-1 p-2 bg-muted/30 rounded">{q.explanation}</div>
-                    {q.socratic_hints && q.socratic_hints.length > 0 && (
-                      <div className="mt-1 p-2 bg-chart-4/5 rounded">
-                        <p className="font-medium text-chart-4 mb-1">💡 引导</p>
-                        {q.socratic_hints.map((h, hi) => <p key={hi}>{h}</p>)}
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground font-medium">📝 查看解析</summary>
+                    <div className="mt-2 space-y-2">
+                      <div className="p-2.5 bg-muted/30 rounded">
+                        <p className="whitespace-pre-wrap">{q.explanation}</p>
                       </div>
-                    )}
+                      {q.socratic_hints && q.socratic_hints.length > 0 && (
+                        <div className="p-2.5 bg-chart-4/5 border border-chart-4/20 rounded">
+                          <p className="font-medium text-chart-4 mb-1">💡 苏格拉底引导</p>
+                          {q.socratic_hints.map((h, hi) => <p key={hi} className="mt-1">{h}</p>)}
+                        </div>
+                      )}
+                    </div>
                   </details>
                 </CardContent>
               </Card>
