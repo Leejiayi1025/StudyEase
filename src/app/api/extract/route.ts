@@ -141,13 +141,26 @@ export async function POST(request: NextRequest) {
     let userContent: string | LLMContentBlock[];
     if (imageList.length > 0) {
       const blocks: LLMContentBlock[] = [];
-      for (const img of imageList) {
+      // Add each image with explicit label
+      for (let i = 0; i < imageList.length; i++) {
+        const img = imageList[i];
         const mediaType = (img.mimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+        // Label before each image
+        blocks.push({ type: 'text' as const, text: `【第${i + 1}张图片，共${imageList.length}张】` });
         blocks.push({ type: 'image' as const, source: { type: 'base64' as const, media_type: mediaType, data: img.data } });
       }
+      // Final instruction after all images
       blocks.push({
         type: 'text' as const,
-        text: `这是${imageList.length}张图片，属于同一份试卷。请识别所有图片中的全部文字，合并成完整的题目。不要遗漏任何内容。${content ? `\n补充信息：${content}` : ''}`,
+        text: `以上是${imageList.length}张图片，它们是同一份试卷的不同页面。
+你的任务：
+1. 逐张识别每张图片中的所有文字，一字不漏
+2. 将所有图片的文字合并在一起，形成完整的内容
+3. 如果一道题跨越多张图片（比如题目在第1张，选项在第2张），必须合并成完整的一道题
+4. 提取完整的文章（如果有）、所有题目及选项
+5. 所有内容都要翻译成中文
+
+${content ? `补充信息：${content}` : ''}`,
       });
       userContent = blocks;
     } else {
