@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { callLLM, type LLMContentBlock } from "@/lib/llm";
 import { getPool, uuid } from "@/storage/database/mysql-client";
+import { requireAuth } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
   try {
+    const user = await requireAuth(request);
     const { content, imageData, imageMimeType, images, sourceType, title, save } = await request.json();
 
     // Support: text, single image (legacy), or multiple images
@@ -22,8 +24,8 @@ export async function POST(request: NextRequest) {
       const materialContent = content || analysisResult.article?.original || `[图片导入 ${imageList.length}张]`;
 
       await pool.execute(
-        `INSERT INTO study_materials (id, title, content, source_type, analysis) VALUES (?, ?, ?, ?, ?)`,
-        [materialId, materialTitle, materialContent, sourceType || (imageList.length > 0 ? 'image' : 'text'), JSON.stringify(analysisResult)]
+        `INSERT INTO study_materials (id, user_id, title, content, source_type, analysis) VALUES (?, ?, ?, ?, ?, ?)`,
+        [materialId, user.id, materialTitle, materialContent, sourceType || (imageList.length > 0 ? 'image' : 'text'), JSON.stringify(analysisResult)]
       );
 
       // Save questions
@@ -31,8 +33,8 @@ export async function POST(request: NextRequest) {
         for (const q of analysisResult.questions) {
           const explanationFull = q.explanation_cn ? `${q.explanation}\n\n${q.explanation_cn}` : q.explanation;
           await pool.execute(
-            `INSERT INTO questions (id, material_id, question_text, options, correct_answer, explanation, question_type, analysis) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [uuid(), materialId, q.question_text, JSON.stringify({ options: q.options, options_translation: q.options_translation, question_translation: q.question_translation, socratic_hints: q.socratic_hints, question_type_cn: q.question_type_cn, explanation_cn: q.explanation_cn }), q.correct_answer, explanationFull, q.question_type || 'reading', JSON.stringify({ socratic_hints: q.socratic_hints })]
+            `INSERT INTO questions (id, user_id, material_id, question_text, options, correct_answer, explanation, question_type, analysis) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [uuid(), user.id, materialId, q.question_text, JSON.stringify({ options: q.options, options_translation: q.options_translation, question_translation: q.question_translation, socratic_hints: q.socratic_hints, question_type_cn: q.question_type_cn, explanation_cn: q.explanation_cn }), q.correct_answer, explanationFull, q.question_type || 'reading', JSON.stringify({ socratic_hints: q.socratic_hints })]
           );
         }
       }
@@ -48,7 +50,7 @@ export async function POST(request: NextRequest) {
           if (existingRow) {
             await pool.execute(`UPDATE vocabulary SET phonetic=?, part_of_speech=?, meaning=?, example_sentence=?, example_translation=?, common_phrases=?, word_forms=?, synonyms=?, antonyms=? WHERE id=?`, [...vocabData, existingRow.id]);
           } else {
-            await pool.execute(`INSERT INTO vocabulary (id, word, phonetic, part_of_speech, meaning, example_sentence, example_translation, common_phrases, word_forms, synonyms, antonyms) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [uuid(), vocab.word, ...vocabData]);
+            await pool.execute(`INSERT INTO vocabulary (id, user_id, word, phonetic, part_of_speech, meaning, example_sentence, example_translation, common_phrases, word_forms, synonyms, antonyms) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [uuid(), user.id, vocab.word, ...vocabData]);
           }
         }
       }
@@ -76,7 +78,7 @@ export async function POST(request: NextRequest) {
                     const parsed = JSON.parse(jsonMatch[0]);
                     for (const item of parsed) {
                       if (item.word && item.meaning) {
-                        await pool.execute(`INSERT IGNORE INTO vocabulary (id, word, phonetic, part_of_speech, meaning, synonyms, antonyms) VALUES (?, ?, ?, ?, ?, ?, ?)`, [uuid(), item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning, item.synonyms ? JSON.stringify(item.synonyms) : null, item.antonyms ? JSON.stringify(item.antonyms) : null]);
+                        await pool.execute(`INSERT IGNORE INTO vocabulary (id, user_id, word, phonetic, part_of_speech, meaning, synonyms, antonyms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [uuid(), user.id, item.word.toLowerCase(), item.phonetic || null, item.pos || null, item.meaning, item.synonyms ? JSON.stringify(item.synonyms) : null, item.antonyms ? JSON.stringify(item.antonyms) : null]);
                       }
                     }
                   }

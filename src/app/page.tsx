@@ -124,6 +124,69 @@ function ClickableText({ text, onWordClick }: { text: string; onWordClick: (word
   );
 }
 
+// ===== AUTH PAGE =====
+function AuthPage({ onAuth }: { onAuth: (user: { id: string; phone: string; nickname: string }) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const res = await fetch('/api/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: mode, phone, password, nickname: nickname || undefined }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        onAuth(data.user);
+      } else {
+        setError(data.error || '操作失败');
+      }
+    } catch {
+      setError('网络错误');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <Card className="w-full max-w-sm">
+        <CardHeader className="text-center">
+          <div className="flex items-center justify-center gap-2 mb-2">
+            <BookOpen className="w-8 h-8 text-primary" />
+            <h1 className="text-2xl font-bold text-primary">StudyEase</h1>
+          </div>
+          <CardTitle className="text-base">{mode === 'login' ? '登录' : '注册'}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Input placeholder="手机号" value={phone} onChange={e => setPhone(e.target.value)} maxLength={11} />
+          <Input placeholder="密码（至少6位）" type="password" value={password} onChange={e => setPassword(e.target.value)} />
+          {mode === 'register' && (
+            <Input placeholder="昵称（可选）" value={nickname} onChange={e => setNickname(e.target.value)} />
+          )}
+          {error && <p className="text-xs text-destructive">{error}</p>}
+          <Button onClick={handleSubmit} disabled={loading || !phone || !password} className="w-full">
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+            {mode === 'login' ? '登录' : '注册'}
+          </Button>
+          <p className="text-xs text-center text-muted-foreground">
+            {mode === 'login' ? '没有账号？' : '已有账号？'}
+            <button className="text-primary ml-1 underline" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}>
+              {mode === 'login' ? '去注册' : '去登录'}
+            </button>
+          </p>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 // Main App Component
 export default function StudyApp() {
   const [activeTab, setActiveTab] = useState<TabType>('home');
@@ -131,9 +194,19 @@ export default function StudyApp() {
     totalWords: 0, masteredWords: 0, learningWords: 0, unresolvedMistakes: 0,
   });
   const [popupWord, setPopupWord] = useState<string | null>(null);
+  const [user, setUser] = useState<{ id: string; phone: string; nickname: string } | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   const handleWordClick = useCallback((word: string) => {
     setPopupWord(word);
+  }, []);
+
+  // Check auth on mount
+  useEffect(() => {
+    fetch('/api/auth').then(r => r.json()).then(data => {
+      if (data.success && data.user) setUser(data.user);
+      setAuthLoading(false);
+    }).catch(() => setAuthLoading(false));
   }, []);
 
   const fetchProgress = useCallback(async () => {
@@ -144,7 +217,27 @@ export default function StudyApp() {
     } catch { /* ignore */ }
   }, []);
 
-  useEffect(() => { fetchProgress(); }, [fetchProgress]);
+  useEffect(() => { if (user) fetchProgress(); }, [fetchProgress, user]);
+
+  const handleLogout = async () => {
+    await fetch('/api/auth', { method: 'DELETE' });
+    setUser(null);
+    setStats({ totalWords: 0, masteredWords: 0, learningWords: 0, unresolvedMistakes: 0 });
+  };
+
+  // Loading
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // Not logged in
+  if (!user) {
+    return <AuthPage onAuth={setUser} />;
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col max-w-lg mx-auto relative">
@@ -155,10 +248,10 @@ export default function StudyApp() {
           <h1 className="font-bold text-lg tracking-tight">StudyEase</h1>
           <span className="text-[10px] opacity-60 font-normal">by Lee</span>
         </div>
-        <Badge variant="secondary" className="bg-primary-foreground/20 text-primary-foreground hover:bg-primary-foreground/30">
-          <Sparkles className="w-3 h-3 mr-1" />
-          AI 智能学习
-        </Badge>
+        <div className="flex items-center gap-2">
+          <span className="text-xs opacity-80">{user.nickname}</span>
+          <button onClick={handleLogout} className="text-xs opacity-60 hover:opacity-100 underline">退出</button>
+        </div>
       </header>
 
       {/* Word Popup */}
