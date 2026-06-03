@@ -487,13 +487,13 @@ function ImportPage({ onDone, onWordClick }: { onDone: () => void; onWordClick: 
         body: JSON.stringify(body),
       });
       const data = await res.json();
-      if (data.success) {
+      if (data.success && data.analysis) {
         setResult(data.analysis as Record<string, unknown>);
       } else {
-        setResult({ error: data.error });
+        setResult({ error: data.error || '识别失败，请重试' });
       }
     } catch {
-      setResult({ error: '识别失败，请重试' });
+      setResult({ error: '网络错误，请重试' });
     } finally {
       setLoading(false);
     }

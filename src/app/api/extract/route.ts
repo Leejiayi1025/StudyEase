@@ -141,27 +141,16 @@ export async function POST(request: NextRequest) {
     let userContent: string | LLMContentBlock[];
     if (imageList.length > 0) {
       const blocks: LLMContentBlock[] = [];
-      // Add each image with explicit label
-      for (let i = 0; i < imageList.length; i++) {
-        const img = imageList[i];
-        const mediaType = (img.mimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-        // Label before each image
-        blocks.push({ type: 'text' as const, text: `【第${i + 1}张图片，共${imageList.length}张】` });
-        blocks.push({ type: 'image' as const, source: { type: 'base64' as const, media_type: mediaType, data: img.data } });
-      }
-      // Final instruction after all images
+      // Add text instruction first
       blocks.push({
         type: 'text' as const,
-        text: `以上是${imageList.length}张图片，它们是同一份试卷的不同页面。
-你的任务：
-1. 逐张识别每张图片中的所有文字，一字不漏
-2. 将所有图片的文字合并在一起，形成完整的内容
-3. 如果一道题跨越多张图片（比如题目在第1张，选项在第2张），必须合并成完整的一道题
-4. 提取完整的文章（如果有）、所有题目及选项
-5. 所有内容都要翻译成中文
-
-${content ? `补充信息：${content}` : ''}`,
+        text: `请识别以下${imageList.length}张图片中的所有英文文字。这些图片是同一份试卷的不同页面。请将所有图片的内容合并，提取完整的文章、题目和选项。如果题目跨越多张图片，请合并成完整的一道题。${content ? `\n补充：${content}` : ''}`,
       });
+      // Add all images
+      for (const img of imageList) {
+        const mediaType = (img.mimeType || 'image/png') as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+        blocks.push({ type: 'image' as const, source: { type: 'base64' as const, media_type: mediaType, data: img.data } });
+      }
       userContent = blocks;
     } else {
       userContent = `分析以下英语文本：\n\n${content}`;
@@ -182,6 +171,18 @@ ${content ? `补充信息：${content}` : ''}`,
       analysisResult = jsonMatch ? JSON.parse(jsonMatch[0]) : { article: null, questions: [], vocabulary: [] };
     } catch {
       analysisResult = { article: { original: content || '', translation: '', sentences: [] }, questions: [], vocabulary: [] };
+    }
+
+    // Log for debugging
+    console.log('[extract] AI response length:', responseContent.length, 'questions:', analysisResult.questions?.length, 'vocab:', analysisResult.vocabulary?.length);
+
+    // If AI returned nothing useful, return error
+    if (!analysisResult.questions?.length && !analysisResult.article?.original && !analysisResult.vocabulary?.length) {
+      return NextResponse.json({
+        success: false,
+        error: 'AI未能识别内容，请确认图片清晰并重试',
+        raw: responseContent.slice(0, 500),
+      });
     }
 
     // Auto-categorize questions
